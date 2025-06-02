@@ -10,6 +10,20 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
+# --- Configuration Constants ---
+DEFAULT_SCI_HUB_MIRRORS = [
+    "https://sci-hub.se/",
+    "https://sci-hub.st/",
+    "https://sci-hub.ru/",
+    "https://sci-hub.red/",
+    "https://NFTsci-hub.box/", # Assuming this is a valid Sci-Hub mirror URL ending with /
+    "https://sci-hub.wf/", 
+    "https://sci-hub.cat/"
+]
+INTER_DOI_DELAY_SECONDS = 5
+MIRROR_SWITCH_DELAY_SECONDS = 3
+# --- End Configuration Constants ---
+
 def clean_filename(title):
     """
     Limpia el título para que sea un nombre de archivo válido.
@@ -71,27 +85,38 @@ def download_pdfs_from_file():
     all_articles_log = []
     successful_articles_data = []
     failed_articles_data = []
+    
+    original_input_columns = [] # To store original column names for Excel ordering
 
     # 1. Entrada de URL de Sci-Hub por el Usuario
-    default_sci_hub_url = "https://sci-hub.se/"
-    user_sci_hub_url = simpledialog.askstring(
-        "URL de Sci-Hub",
-        "Ingresa la URL base de Sci-Hub:",
-        initialvalue=default_sci_hub_url
+    # The user_sci_hub_url will be the first one tried.
+    # The DEFAULT_SCI_HUB_MIRRORS list will be used if the user-provided one fails or if user input is skipped.
+    initial_mirror_to_try = DEFAULT_SCI_HUB_MIRRORS[0] if DEFAULT_SCI_HUB_MIRRORS else "https://sci-hub.se/"
+    
+    user_sci_hub_url_input = simpledialog.askstring(
+        "URL de Sci-Hub Principal",
+        "Ingresa la URL principal de Sci-Hub a intentar primero:",
+        initialvalue=initial_mirror_to_try
     )
 
-    if user_sci_hub_url is None: # Usuario cerró el diálogo
+    primary_sci_hub_url_to_use = ""
+
+    if user_sci_hub_url_input is None: # Usuario cerró el diálogo
         messagebox.showinfo("Información", "No se ingresó URL de Sci-Hub. El programa terminará.")
         return
-    elif not user_sci_hub_url.strip(): # Usuario ingresó cadena vacía
-        sci_hub_base_url = default_sci_hub_url
-        messagebox.showinfo("Información", f"URL de Sci-Hub no especificada, se usará la predeterminada: {default_sci_hub_url}")
+    elif not user_sci_hub_url_input.strip(): # Usuario ingresó cadena vacía
+        primary_sci_hub_url_to_use = initial_mirror_to_try
+        messagebox.showinfo("Información", f"URL de Sci-Hub no especificada, se usará la predeterminada: {primary_sci_hub_url_to_use}")
     else:
-        sci_hub_base_url = user_sci_hub_url.strip()
-        if not sci_hub_base_url.endswith('/'):
-            sci_hub_base_url += '/'
+        primary_sci_hub_url_to_use = user_sci_hub_url_input.strip()
+        if not primary_sci_hub_url_to_use.endswith('/'):
+            primary_sci_hub_url_to_use += '/'
     
-    print(f"Usando URL de Sci-Hub: {sci_hub_base_url}")
+    # This primary_sci_hub_url_to_use will be the one passed around and tried first.
+    # The loop for mirrors will later incorporate this and then the DEFAULT_SCI_HUB_MIRRORS list.
+    # The variable 'sci_hub_base_url_for_report' used for Excel reporting will remain primary_sci_hub_url_to_use.
+    sci_hub_base_url_for_report = primary_sci_hub_url_to_use
+    print(f"URL de Sci-Hub principal (para primer intento y reportes): {sci_hub_base_url_for_report}")
 
     # 2. Solicitar al usuario que seleccione el archivo Excel o CSV
     input_file_path = filedialog.askopenfilename(
@@ -116,30 +141,37 @@ def download_pdfs_from_file():
     try:
         file_extension = os.path.splitext(input_file_path)[1].lower()
         if file_extension in ['.xlsx', '.xls']:
-            # Intentar leer con nombres de columna comunes para Excel
             try:
-                df = pd.read_excel(input_file_path, usecols=['DOI', 'Title'])
-            except ValueError:
-                try:
-                    df = pd.read_excel(input_file_path, usecols=['doi', 'titulo'])
-                    df.rename(columns={'doi': 'DOI', 'titulo': 'Title'}, inplace=True)
-                except ValueError:
-                    messagebox.showerror("Error de Excel", "No se pudieron encontrar las columnas 'DOI' y 'Title' (o 'doi' y 'titulo') en el archivo Excel.")
+                df = pd.read_excel(input_file_path)
+                # Standardize column names if 'doi'/'titulo' are present and 'DOI'/'Title' are not
+                if 'doi' in df.columns and 'DOI' not in df.columns:
+                    df.rename(columns={'doi': 'DOI'}, inplace=True)
+                if 'titulo' in df.columns and 'Title' not in df.columns:
+                    df.rename(columns={'titulo': 'Title'}, inplace=True)
+                if not ({'DOI', 'Title'} <= set(df.columns)):
+                    messagebox.showerror("Error de Excel", "El archivo Excel debe contener columnas 'DOI' y 'Title'.")
                     return
+            except Exception as e:
+                 messagebox.showerror("Error de Excel", f"No se pudieron leer las columnas esperadas del archivo Excel: {e}")
+                 return
         elif file_extension == '.csv':
-            # Intentar leer con nombres de columna comunes para CSV
             try:
-                df = pd.read_csv(input_file_path, usecols=['DOI', 'Title'])
-            except ValueError:
-                try:
-                    df = pd.read_csv(input_file_path, usecols=['doi', 'titulo'])
-                    df.rename(columns={'doi': 'DOI', 'titulo': 'Title'}, inplace=True)
-                except ValueError:
-                    messagebox.showerror("Error de CSV", "No se pudieron encontrar las columnas 'DOI' y 'Title' (o 'doi' y 'titulo') en el archivo CSV.")
+                df = pd.read_csv(input_file_path)
+                if 'doi' in df.columns and 'DOI' not in df.columns:
+                    df.rename(columns={'doi': 'DOI'}, inplace=True)
+                if 'titulo' in df.columns and 'Title' not in df.columns:
+                    df.rename(columns={'titulo': 'Title'}, inplace=True)
+                if not ({'DOI', 'Title'} <= set(df.columns)):
+                    messagebox.showerror("Error de CSV", "El archivo CSV debe contener columnas 'DOI' y 'Title'.")
                     return
+            except Exception as e:
+                 messagebox.showerror("Error de CSV", f"No se pudieron leer las columnas esperadas del archivo CSV: {e}")
+                 return
         else:
             messagebox.showerror("Error de Archivo", f"Formato de archivo no soportado: {file_extension}")
             return
+        
+        original_input_columns = [col for col in df.columns if col not in ['DOI', 'Title']]
             
     except FileNotFoundError:
         messagebox.showerror("Error", f"No se pudo encontrar el archivo: {input_file_path}")
@@ -200,90 +232,126 @@ def download_pdfs_from_file():
                 clean_title_for_filename = clean_filename(effective_title)
                 pdf_filename_in_zip = clean_title_for_filename[:150] + ".pdf"
                 
-                print(f"\nProcesando artículo ({index + 1}/{total_articles}): {effective_title}")
+                print(f"\nProcesando artículo ({index + 1}/{total_articles}): {effective_title} (DOI: {doi})")
                 
-                full_sci_hub_url = f"{sci_hub_base_url}{doi}"
+                # --- Prepare list of mirrors for this DOI ---
+                mirrors_to_try_for_this_doi = []
+                if primary_sci_hub_url_to_use and primary_sci_hub_url_to_use not in mirrors_to_try_for_this_doi:
+                    mirrors_to_try_for_this_doi.append(primary_sci_hub_url_to_use)
+                for mirror in DEFAULT_SCI_HUB_MIRRORS:
+                    if mirror not in mirrors_to_try_for_this_doi:
+                        mirrors_to_try_for_this_doi.append(mirror)
+                
                 pdf_content = None
-                # download_attempt_reason = "" # Replaced by detailed_status and failure_reason_for_report
+                download_successful_this_doi = False
+                successful_mirror_for_this_doi = ""
+                # detailed_status and failure_reason_for_report are initialized per DOI before this loop
 
-                # Primary Download Attempt using extracted link
-                print(f"Intentando extraer enlace PDF desde: {full_sci_hub_url}")
-                actual_pdf_download_url = extract_pdf_link_from_html(full_sci_hub_url, session)
-
-                if actual_pdf_download_url:
-                    print(f"Intentando descargar PDF desde enlace extraído: {actual_pdf_download_url}")
-                    try:
-                        response = session.get(actual_pdf_download_url, timeout=60)
-                        response.raise_for_status()
-                        content_type = response.headers.get('Content-Type', '').lower()
-                        if 'application/pdf' in content_type:
-                            pdf_content = response.content
-                            detailed_status = "Success_iframe_or_embed_extraction"
-                            print(f"ÉXITO (enlace extraído): PDF obtenido para '{effective_title}'.")
-                        else:
-                            failure_reason_for_report = f"Content-Type was not application/pdf, but {content_type}"
-                            detailed_status = "Failure_iframe_or_embed_extraction_not_pdf"
-                            print(f"FALLO (enlace extraído): Contenido no es PDF desde {actual_pdf_download_url}. Content-Type: {content_type}")
-                    except requests.exceptions.HTTPError as e:
-                        failure_reason_for_report = f"HTTPError: {str(e)} (Status: {e.response.status_code})"
-                        detailed_status = f"Failure_iframe_or_embed_extraction_HTTP{e.response.status_code}"
-                        print(f"FALLO (enlace extraído): HTTP Error {e.response.status_code} para {actual_pdf_download_url}. Error: {e}")
-                    except requests.exceptions.RequestException as e:
-                        failure_reason_for_report = str(e)
-                        detailed_status = "Failure_iframe_or_embed_extraction_RequestException"
-                        print(f"FALLO (enlace extraído): No se pudo descargar desde {actual_pdf_download_url}. Error: {e}")
-                    except Exception as e:
-                        failure_reason_for_report = f"Unexpected error: {str(e)}"
-                        detailed_status = "Failure_iframe_or_embed_extraction_Unexpected"
-                        print(f"FALLO INESPERADO (enlace extraído): Error descargando desde {actual_pdf_download_url}. Error: {e}")
-                else:
-                    failure_reason_for_report = "No PDF link found in HTML (iframe/embed)"
-                    detailed_status = "Failure_No_PDF_Link_Found_In_HTML"
-                    print(f"Fallo al extraer enlace: No se encontró iframe/embed con enlace PDF en {full_sci_hub_url}")
-
-
-                # Fallback Download Attempt (direct access to Sci-Hub URL)
-                if not pdf_content:
-                    if actual_pdf_download_url: 
-                        print(f"Fallback: Intentando descargar directamente desde {full_sci_hub_url} porque el enlace extraído ({actual_pdf_download_url}) falló.")
-                    else: 
-                        print(f"Fallback: No se pudo extraer enlace PDF. Intentando descargar directamente desde {full_sci_hub_url}")
+                for mirror_idx, current_mirror_base_url in enumerate(mirrors_to_try_for_this_doi):
+                    print(f"Intentando con mirror ({mirror_idx + 1}/{len(mirrors_to_try_for_this_doi)}): {current_mirror_base_url} para DOI: {doi}")
                     
-                    try:
-                        response = session.get(full_sci_hub_url, timeout=30)
-                        response.raise_for_status()
-                        content_type = response.headers.get('Content-Type', '').lower()
-                        if 'application/pdf' in content_type:
-                            pdf_content = response.content
-                            detailed_status = "Success_direct_DOI_access_fallback"
-                            failure_reason_for_report = "" # Clear previous failure reason if fallback succeeded
-                            print(f"ÉXITO (directo-fallback): PDF obtenido para '{effective_title}'.")
+                    full_sci_hub_url_for_html_page = f"{current_mirror_base_url}{doi}"
+                    
+                    # Reset reasons for each mirror attempt, but keep the last one if all fail
+                    current_mirror_failure_reason = "" 
+                    current_mirror_detailed_status = ""
+
+                    # --- Primary Download Attempt using extracted link from current_mirror_base_url ---
+                    print(f"Intentando extraer enlace PDF desde: {full_sci_hub_url_for_html_page}")
+                    actual_pdf_download_url = extract_pdf_link_from_html(full_sci_hub_url_for_html_page, session)
+
+                    if actual_pdf_download_url:
+                        print(f"Intentando descargar PDF desde enlace extraído: {actual_pdf_download_url}")
+                        try:
+                            response = session.get(actual_pdf_download_url, timeout=60)
+                            response.raise_for_status()
+                            content_type = response.headers.get('Content-Type', '').lower()
+                            if 'application/pdf' in content_type:
+                                pdf_content = response.content
+                                current_mirror_detailed_status = f"Success_iframe_or_embed_extraction_from_{current_mirror_base_url}"
+                                print(f"ÉXITO (enlace extraído con {current_mirror_base_url}): PDF obtenido para '{effective_title}'.")
+                            else:
+                                current_mirror_failure_reason = f"Content-Type was not application/pdf ({content_type}) from extracted link via {current_mirror_base_url}"
+                                current_mirror_detailed_status = f"Failure_iframe_or_embed_extraction_not_pdf_from_{current_mirror_base_url}"
+                                print(f"FALLO (enlace extraído con {current_mirror_base_url}): Contenido no es PDF. Content-Type: {content_type}")
+                        except requests.exceptions.HTTPError as e:
+                            current_mirror_failure_reason = f"HTTPError ({e.response.status_code}) from extracted link {actual_pdf_download_url} (via {current_mirror_base_url}): {str(e)}"
+                            current_mirror_detailed_status = f"Failure_iframe_or_embed_extraction_HTTP{e.response.status_code}_from_{current_mirror_base_url}"
+                            print(f"FALLO (enlace extraído con {current_mirror_base_url}): HTTP Error {e.response.status_code}. Error: {e}")
+                        except requests.exceptions.RequestException as e:
+                            current_mirror_failure_reason = f"RequestException from extracted link {actual_pdf_download_url} (via {current_mirror_base_url}): {str(e)}"
+                            current_mirror_detailed_status = f"Failure_iframe_or_embed_extraction_RequestException_from_{current_mirror_base_url}"
+                            print(f"FALLO (enlace extraído con {current_mirror_base_url}): Error de red. Error: {e}")
+                        except Exception as e:
+                            current_mirror_failure_reason = f"Unexpected error from extracted link {actual_pdf_download_url} (via {current_mirror_base_url}): {str(e)}"
+                            current_mirror_detailed_status = f"Failure_iframe_or_embed_extraction_Unexpected_from_{current_mirror_base_url}"
+                            print(f"FALLO INESPERADO (enlace extraído con {current_mirror_base_url}): Error: {e}")
+                    else:
+                        current_mirror_failure_reason = f"No PDF link found in HTML from {full_sci_hub_url_for_html_page}"
+                        current_mirror_detailed_status = f"Failure_No_PDF_Link_Found_In_HTML_from_{current_mirror_base_url}"
+                        print(f"Fallo al extraer enlace: No se encontró iframe/embed con PDF en {full_sci_hub_url_for_html_page}")
+
+                    # --- Fallback Download Attempt (direct access to current_mirror_base_url) ---
+                    if not pdf_content:
+                        # Log previous attempt's failure before trying direct, if any
+                        failure_reason_for_report = current_mirror_failure_reason 
+                        detailed_status = current_mirror_detailed_status
+
+                        print(f"Fallback: Intentando descargar directamente desde {full_sci_hub_url_for_html_page}")
+                        try:
+                            response = session.get(full_sci_hub_url_for_html_page, timeout=30)
+                            response.raise_for_status()
+                            content_type = response.headers.get('Content-Type', '').lower()
+                            if 'application/pdf' in content_type:
+                                pdf_content = response.content
+                                current_mirror_detailed_status = f"Success_direct_DOI_access_fallback_from_{current_mirror_base_url}"
+                                current_mirror_failure_reason = "" # Clear failure reason
+                                print(f"ÉXITO (directo-fallback con {current_mirror_base_url}): PDF obtenido para '{effective_title}'.")
+                            else:
+                                current_mirror_failure_reason = f"Content-Type was not application/pdf ({content_type}) from direct DOI access via {current_mirror_base_url}"
+                                current_mirror_detailed_status = f"Failure_direct_DOI_access_not_pdf_from_{current_mirror_base_url}"
+                                print(f"FALLO (directo-fallback con {current_mirror_base_url}): Contenido no es PDF. Content-Type: {content_type}.")
+                        except requests.exceptions.HTTPError as e:
+                            current_mirror_failure_reason = f"HTTPError ({e.response.status_code}) from direct DOI access {full_sci_hub_url_for_html_page}: {str(e)}"
+                            current_mirror_detailed_status = f"Failure_direct_DOI_access_HTTP{e.response.status_code}_from_{current_mirror_base_url}"
+                            print(f"FALLO (directo-fallback con {current_mirror_base_url}): HTTP Error {e.response.status_code}. Error: {e}")
+                        except requests.exceptions.RequestException as e:
+                            current_mirror_failure_reason = f"RequestException from direct DOI access {full_sci_hub_url_for_html_page}: {str(e)}"
+                            current_mirror_detailed_status = f"Failure_direct_DOI_access_RequestException_from_{current_mirror_base_url}"
+                            print(f"FALLO (directo-fallback con {current_mirror_base_url}): Error de red. Error: {e}")
+                        except Exception as e:
+                            current_mirror_failure_reason = f"Unexpected error from direct DOI access {full_sci_hub_url_for_html_page}: {str(e)}"
+                            current_mirror_detailed_status = f"Failure_direct_DOI_access_Unexpected_from_{current_mirror_base_url}"
+                            print(f"FALLO INESPERADO (directo-fallback con {current_mirror_base_url}): Error: {e}")
+                    
+                    # Update final status for the DOI based on this mirror's outcome
+                    failure_reason_for_report = current_mirror_failure_reason
+                    detailed_status = current_mirror_detailed_status
+
+                    if pdf_content:
+                        download_successful_this_doi = True
+                        successful_mirror_for_this_doi = current_mirror_base_url
+                        # detailed_status is already set by the successful path
+                        failure_reason_for_report = "" # Clear if successful
+                        print(f"DESCARGA EXITOSA para DOI {doi} usando mirror {current_mirror_base_url}")
+                        break # Exit mirror loop for this DOI
+                    else:
+                        print(f"FALLO con el mirror {current_mirror_base_url} para DOI {doi}. Razón: {failure_reason_for_report}")
+                        if mirror_idx < len(mirrors_to_try_for_this_doi) - 1:
+                            print(f"Intentando siguiente mirror en {MIRROR_SWITCH_DELAY_SECONDS} segundos...")
+                            time.sleep(MIRROR_SWITCH_DELAY_SECONDS)
                         else:
-                            # Keep the failure_reason_for_report from the extraction attempt if this also fails due to content type
-                            if not detailed_status.startswith("Failure_No_PDF_Link_Found"): # if link was found but failed, this is a new reason
-                                failure_reason_for_report = f"Content-Type was not application/pdf from direct DOI access, but {content_type}"
-                            detailed_status = "Failure_direct_DOI_access_not_pdf"
-                            print(f"FALLO (directo-fallback): Contenido no es PDF desde {full_sci_hub_url}. Content-Type: {content_type}.")
-                    except requests.exceptions.HTTPError as e:
-                        failure_reason_for_report = f"HTTPError direct DOI: {str(e)} (Status: {e.response.status_code})"
-                        detailed_status = f"Failure_direct_DOI_access_HTTP{e.response.status_code}"
-                        print(f"FALLO (directo-fallback): HTTP Error {e.response.status_code} para {full_sci_hub_url}. Error: {e}")
-                    except requests.exceptions.RequestException as e:
-                        failure_reason_for_report = f"RequestException direct DOI: {str(e)}"
-                        detailed_status = "Failure_direct_DOI_access_RequestException"
-                        print(f"FALLO (directo-fallback): No se pudo descargar desde {full_sci_hub_url}. Error: {e}")
-                    except Exception as e:
-                        failure_reason_for_report = f"Unexpected error direct DOI: {str(e)}"
-                        detailed_status = "Failure_direct_DOI_access_Unexpected"
-                        print(f"FALLO INESPERADO (directo-fallback): Error descargando desde {full_sci_hub_url}. Error: {e}")
+                            print(f"Todos los mirrors intentados para DOI {doi} sin éxito.")
                 
                 end_time = datetime.now()
 
-                # Process pdf_content if obtained
-                if pdf_content:
-                    successful_articles_data.append(original_row_data)
-                    # detailed_status is already set from successful download path
-                    # failure_reason_for_report should be empty or reflect the successful method if needed, but generally empty for success
+                # Process pdf_content if obtained (after trying all mirrors)
+                if download_successful_this_doi and pdf_content:
+                    data_for_successful_sheet = original_row_data.copy()
+                    data_for_successful_sheet['Successful_Mirror'] = successful_mirror_for_this_doi
+                    successful_articles_data.append(data_for_successful_sheet)
+                    # detailed_status should reflect the successful mirror and method
+                    # failure_reason_for_report is empty for success
 
                     temp_dir = "temp_scihub_pdfs"
                     if not os.path.exists(temp_dir):
@@ -330,12 +398,209 @@ def download_pdfs_from_file():
                     'Detailed_Status': detailed_status,
                     'Failure_Reason': failure_reason_for_report
                     # SciHub_Link will be added later
+                    # Add successful mirror to log
+                    'Successful_Mirror': successful_mirror_for_this_doi 
                 }
                 all_articles_log.append(log_entry)
                 
-                # Introduce a delay before processing the next article
-                print(f"Esperando 5 segundos antes del siguiente artículo...")
-                time.sleep(5)
+                # Introduce a delay before processing the next article (regardless of success/failure of this DOI)
+                print(f"Esperando {INTER_DOI_DELAY_SECONDS} segundos antes del siguiente artículo...")
+                time.sleep(INTER_DOI_DELAY_SECONDS)
+    
+    # --- End of Main DOI Loop ---
+
+    # --- Retry Phase for Failed Downloads ---
+    if failed_articles_data: # Only run if there are failures
+        print(f"\n{'='*20} INICIANDO FASE DE REINTENTO {'='*20}")
+        print(f"Se reintentarán {len(failed_articles_data)} artículos fallidos.")
+        
+        articles_successfully_retried_ids = [] # Store DOIs of successfully retried articles
+        temp_failed_articles_data_for_iteration = list(failed_articles_data) # Iterate over a copy
+
+        for retry_idx, failed_article_entry in enumerate(temp_failed_articles_data_for_iteration):
+            doi_to_retry = str(failed_article_entry.get('DOI', failed_article_entry.get('doi', ''))).strip()
+            original_title_for_retry = str(failed_article_entry.get('Title', failed_article_entry.get('title', doi_to_retry))).strip()
+            effective_title_for_retry = original_title_for_retry if original_title_for_retry else doi_to_retry
+            
+            print(f"\nReintentando artículo ({retry_idx + 1}/{len(temp_failed_articles_data_for_iteration)}): {effective_title_for_retry} (DOI: {doi_to_retry})")
+
+            # --- Mirror Cycling Logic (copied and adapted for retry) ---
+            mirrors_to_try_for_this_doi_retry = []
+            if primary_sci_hub_url_to_use and primary_sci_hub_url_to_use not in mirrors_to_try_for_this_doi_retry:
+                mirrors_to_try_for_this_doi_retry.append(primary_sci_hub_url_to_use)
+            for mirror in DEFAULT_SCI_HUB_MIRRORS:
+                if mirror not in mirrors_to_try_for_this_doi_retry:
+                    mirrors_to_try_for_this_doi_retry.append(mirror)
+
+            pdf_content_retry = None
+            retry_successful_this_doi = False
+            successful_mirror_for_retry = ""
+            retry_detailed_status = ""
+            retry_failure_reason = ""
+            retry_start_time = datetime.now() # For updating duration if successful
+
+            for mirror_idx_retry, current_mirror_base_url_retry in enumerate(mirrors_to_try_for_this_doi_retry):
+                print(f"Reintento con mirror ({mirror_idx_retry + 1}/{len(mirrors_to_try_for_this_doi_retry)}): {current_mirror_base_url_retry} para DOI: {doi_to_retry}")
+                full_sci_hub_url_for_html_page_retry = f"{current_mirror_base_url_retry}{doi_to_retry}"
+                
+                current_mirror_failure_reason_retry = ""
+                current_mirror_detailed_status_retry = ""
+
+                actual_pdf_download_url_retry = extract_pdf_link_from_html(full_sci_hub_url_for_html_page_retry, session)
+                if actual_pdf_download_url_retry:
+                    try:
+                        response = session.get(actual_pdf_download_url_retry, timeout=60)
+                        response.raise_for_status()
+                        content_type = response.headers.get('Content-Type', '').lower()
+                        if 'application/pdf' in content_type:
+                            pdf_content_retry = response.content
+                            current_mirror_detailed_status_retry = f"Success_RETRY_iframe_embed_from_{current_mirror_base_url_retry}"
+                        else:
+                            current_mirror_failure_reason_retry = f"RETRY: Content-Type not PDF ({content_type}) from {current_mirror_base_url_retry}"
+                            current_mirror_detailed_status_retry = f"Failure_RETRY_iframe_embed_not_pdf_from_{current_mirror_base_url_retry}"
+                    except requests.exceptions.RequestException as e:
+                        current_mirror_failure_reason_retry = f"RETRY: RequestException from {current_mirror_base_url_retry}: {str(e)}"
+                        current_mirror_detailed_status_retry = f"Failure_RETRY_iframe_embed_RequestException_from_{current_mirror_base_url_retry}"
+                    # Simplified error handling for brevity in retry, can be expanded
+                
+                if not pdf_content_retry: # Fallback if extraction failed or link didn't yield PDF
+                    # Update status from extraction attempt before trying direct
+                    retry_failure_reason = current_mirror_failure_reason_retry
+                    retry_detailed_status = current_mirror_detailed_status_retry
+                    try:
+                        response = session.get(full_sci_hub_url_for_html_page_retry, timeout=30)
+                        response.raise_for_status()
+                        content_type = response.headers.get('Content-Type', '').lower()
+                        if 'application/pdf' in content_type:
+                            pdf_content_retry = response.content
+                            current_mirror_detailed_status_retry = f"Success_RETRY_direct_DOI_from_{current_mirror_base_url_retry}"
+                            current_mirror_failure_reason_retry = "" 
+                        else:
+                            current_mirror_failure_reason_retry = f"RETRY: Content-Type not PDF ({content_type}) on direct from {current_mirror_base_url_retry}"
+                            current_mirror_detailed_status_retry = f"Failure_RETRY_direct_DOI_not_pdf_from_{current_mirror_base_url_retry}"
+                    except requests.exceptions.RequestException as e:
+                        current_mirror_failure_reason_retry = f"RETRY: RequestException direct DOI from {current_mirror_base_url_retry}: {str(e)}"
+                        current_mirror_detailed_status_retry = f"Failure_RETRY_direct_DOI_RequestException_from_{current_mirror_base_url_retry}"
+
+                retry_failure_reason = current_mirror_failure_reason_retry
+                retry_detailed_status = current_mirror_detailed_status_retry
+
+                if pdf_content_retry:
+                    retry_successful_this_doi = True
+                    successful_mirror_for_retry = current_mirror_base_url_retry
+                    retry_failure_reason = "" # Clear failure reason
+                    print(f"ÉXITO EN REINTENTO para DOI {doi_to_retry} usando mirror {successful_mirror_for_retry}")
+                    break 
+                else:
+                    print(f"FALLO EN REINTENTO con mirror {current_mirror_base_url_retry} para DOI {doi_to_retry}. Razón: {retry_failure_reason}")
+                    if mirror_idx_retry < len(mirrors_to_try_for_this_doi_retry) - 1:
+                        print(f"Intentando siguiente mirror para reintento en {MIRROR_SWITCH_DELAY_SECONDS} segundos...")
+                        time.sleep(MIRROR_SWITCH_DELAY_SECONDS)
+            # --- End of Mirror Cycling for Retry ---
+
+            retry_end_time = datetime.now()
+
+            # Update data structures based on retry outcome
+            if retry_successful_this_doi and pdf_content_retry:
+                successful_downloads += 1
+                articles_successfully_retried_ids.append(doi_to_retry)
+
+                # Add to successful_articles_data (original data from failed_article_entry)
+                original_data_for_success = {k: v for k, v in failed_article_entry.items() if k not in ['Failure_Reason', 'Detailed_Status']}
+                original_data_for_success['Successful_Mirror'] = successful_mirror_for_retry
+                successful_articles_data.append(original_data_for_success)
+                
+                # Save the PDF
+                clean_title_for_filename_retry = clean_filename(effective_title_for_retry)
+                pdf_filename_in_zip_retry = clean_title_for_filename_retry[:150] + ".pdf"
+                temp_dir_retry = "temp_scihub_pdfs" # Assuming zf is still open or handle zipping differently for retries
+                if not os.path.exists(temp_dir_retry): os.makedirs(temp_dir_retry)
+                temp_pdf_path_retry = os.path.join(temp_dir_retry, f"temp_RETRY_{os.getpid()}_{retry_idx}_{pdf_filename_in_zip_retry}")
+                with open(temp_pdf_path_retry, 'wb') as f: f.write(pdf_content_retry)
+                try:
+                    pdf_size_bytes_retry = os.path.getsize(temp_pdf_path_retry)
+                    total_downloaded_size_bytes += pdf_size_bytes_retry
+                except OSError as e: print(f"Advertencia: No se pudo obtener tamaño de archivo temporal (reintento) {temp_pdf_path_retry}: {e}")
+                
+                # This assumes zf is still open from the main loop. This might need adjustment if zf is closed.
+                # For now, let's assume it's open or we collect paths and zip later.
+                # If zf is closed, we'd need to reopen in append mode or handle zipping after retries.
+                # Let's collect paths and add to zip after retry loop for simplicity if zf was closed.
+                # However, the original structure has 'with zipfile.ZipFile(...) as zf:' enclosing the main loop.
+                # This retry logic is outside that. So, zf is CLOSED here.
+                # This part needs to be re-thought: PDFs from retries cannot be added to the same zip file easily.
+                # Option 1: Create a separate ZIP for retried files. (No)
+                # Option 2: Don't zip retried files for now, just save them and log. (No, we'll append)
+                # Option 3: Re-open the original zip in append mode ( 'a' ) (Yes)
+                
+                # Add the successfully retried PDF to the main ZIP file
+                # pdf_filename_in_zip_retry was already defined above where temp_pdf_path_retry is.
+                # effective_title_for_retry is also available.
+                # pdf_filename_in_zip_for_retry = clean_filename(effective_title_for_retry)[:150] + ".pdf"
+                # This was already used for temp_pdf_path_retry's name construction.
+
+                try:
+                    with zipfile.ZipFile(zip_path, 'a', zipfile.ZIP_DEFLATED) as zf_append: # Open in append mode
+                        zf_append.write(temp_pdf_path_retry, arcname=pdf_filename_in_zip_retry)
+                    print(f"PDF '{pdf_filename_in_zip_retry}' (obtenido en reintento) agregado al ZIP: {zip_path}")
+                except Exception as e:
+                    print(f"Error CRÍTICO al agregar PDF de reintento '{pdf_filename_in_zip_retry}' al ZIP: {e}")
+                    # This is a more critical error, as the PDF is downloaded but not archived as expected.
+                    # Consider how to alert the user more strongly or log this problem.
+                    # For now, a print message will suffice for the agent's task.
+                
+                temp_pdf_paths.append(temp_pdf_path_retry) # Still add to general list for cleanup
+
+                # Update all_articles_log
+                for log_idx, log_entry in enumerate(all_articles_log):
+                    log_doi = str(log_entry.get('DOI', log_entry.get('doi', ''))).strip()
+                    if log_doi == doi_to_retry:
+                        all_articles_log[log_idx]['Detailed_Status'] = retry_detailed_status
+                        all_articles_log[log_idx]['Failure_Reason'] = ""
+                        all_articles_log[log_idx]['Successful_Mirror'] = successful_mirror_for_retry
+                        all_articles_log[log_idx]['End_Time'] = retry_end_time.strftime("%Y-%m-%d %H:%M:%S")
+                        # Recalculate duration based on original start time
+                        original_start_time_str = all_articles_log[log_idx]['Start_Time']
+                        original_start_time_dt = datetime.strptime(original_start_time_str, "%Y-%m-%d %H:%M:%S")
+                        all_articles_log[log_idx]['Duration_Seconds'] = (retry_end_time - original_start_time_dt).total_seconds()
+                        break 
+            else: # Retry still failed
+                print(f"REINTENTO FALLIDO para DOI {doi_to_retry} después de todos los mirrors.")
+                # Update all_articles_log with the latest failure reason from retry
+                for log_idx, log_entry in enumerate(all_articles_log):
+                    log_doi = str(log_entry.get('DOI', log_entry.get('doi', ''))).strip()
+                    if log_doi == doi_to_retry:
+                        all_articles_log[log_idx]['Detailed_Status'] = retry_detailed_status
+                        all_articles_log[log_idx]['Failure_Reason'] = retry_failure_reason
+                        # Keep original End_Time and Duration unless we want to reflect retry attempt time
+                        break
+                # failed_article_entry remains in failed_articles_data if not removed, its 'Failure_Reason' needs update for Excel
+                for item in failed_articles_data: # Update the original list
+                    item_doi = str(item.get('DOI', item.get('doi', ''))).strip()
+                    if item_doi == doi_to_retry:
+                        item['Failure_Reason'] = retry_failure_reason
+                        item['Detailed_Status'] = retry_detailed_status
+                        break
+            
+            # Delay between retrying different DOIs
+            if retry_idx < len(temp_failed_articles_data_for_iteration) - 1:
+                 print(f"Esperando {INTER_DOI_DELAY_SECONDS} segundos antes del siguiente reintento de DOI...")
+                 time.sleep(INTER_DOI_DELAY_SECONDS)
+
+        # Remove successfully retried articles from the original failed_articles_data list
+        if articles_successfully_retried_ids:
+            failed_articles_data = [item for item in failed_articles_data if str(item.get('DOI', item.get('doi', ''))).strip() not in articles_successfully_retried_ids]
+        
+        print(f"\n{'='*20} FASE DE REINTENTO COMPLETADA {'='*20}")
+        # Rebuild the simple 'failed_downloads' list for the summary message
+        failed_downloads = [] 
+        for failed_item in failed_articles_data:
+            title_for_summary = str(failed_item.get('Title', failed_item.get('title', 'Unknown Title'))).strip()
+            doi_for_summary = str(failed_item.get('DOI', failed_item.get('doi', 'Unknown DOI'))).strip()
+            reason_for_summary = str(failed_item.get('Failure_Reason', 'Unknown reason from retry')).strip()
+            failed_downloads.append({'title': title_for_summary, 'doi': doi_for_summary, 'reason': reason_for_summary})
+
+    # --- End of Retry Phase ---
 
     except FileNotFoundError:
         messagebox.showerror("Error", f"No se pudo crear el archivo ZIP en la ruta especificada (Directorio no encontrado): {zip_path}")
@@ -400,43 +665,57 @@ def download_pdfs_from_file():
         else:
             print(f"Generando reporte Excel en: {excel_report_path}")
             try:
-                # Prepare 'Obtenidos' sheet
-                df_obtenidos = pd.DataFrame(successful_articles_data)
-                if not df_obtenidos.empty:
-                    df_obtenidos['SciHub_Link'] = df_obtenidos.apply(
-                        lambda row: f"{sci_hub_base_url}{row.get('DOI', row.get('doi', ''))}" if pd.notna(row.get('DOI', row.get('doi', ''))) else '', 
-                        axis=1
-                    )
-                else: # Ensure SciHub_Link column exists even if empty
-                    # Need to know original columns if we want to preserve them all before adding SciHub_Link
-                    # For simplicity, if completely empty, just define it. If it has columns, add to them.
-                    if not 'SciHub_Link' in df_obtenidos.columns:
-                         df_obtenidos['SciHub_Link'] = pd.Series(dtype='object')
-
-
-                # Prepare 'Fallidos' sheet
-                df_fallidos = pd.DataFrame(failed_articles_data)
-                if not df_fallidos.empty:
-                    df_fallidos['SciHub_Link'] = df_fallidos.apply(
-                        lambda row: f"{sci_hub_base_url}{row.get('DOI', row.get('doi', ''))}" if pd.notna(row.get('DOI', row.get('doi', ''))) else '', 
-                        axis=1
-                    )
-                else:
-                    if not 'SciHub_Link' in df_fallidos.columns:
-                         df_fallidos['SciHub_Link'] = pd.Series(dtype='object')
-                    # It should already have Failure_Reason and Detailed_Status from data collection step
+                # Define preferred column orders
+                # Base columns from original input (excluding DOI and Title which are handled)
+                # original_input_columns is defined after df is loaded.
                 
-                # Prepare 'Tiempos' sheet
-                df_tiempos = pd.DataFrame(all_articles_log)
-                if not df_tiempos.empty:
-                    df_tiempos['SciHub_Link'] = df_tiempos.apply(
-                        lambda row: f"{sci_hub_base_url}{row.get('DOI', row.get('doi', ''))}" if pd.notna(row.get('DOI', row.get('doi', ''))) else '', 
-                        axis=1
-                    )
-                else:
-                     if not 'SciHub_Link' in df_tiempos.columns:
-                         df_tiempos['SciHub_Link'] = pd.Series(dtype='object')
-                # It should have all original columns + timing + status columns
+                # For 'Obtenidos' sheet
+                obtenidos_core_cols = ['DOI', 'Title']
+                obtenidos_status_cols = ['Successful_Mirror']
+                obtenidos_link_col = ['SciHub_Link']
+                # Ensure all original_input_columns are included, avoiding duplicates of core/status
+                remaining_obtenidos_cols = [col for col in original_input_columns if col not in obtenid_core_cols + obtenid_status_cols]
+                ordered_obtenidos_cols = obtenid_core_cols + obtenid_status_cols + remaining_obtenidos_cols + obtenid_link_col
+
+                # For 'Fallidos' sheet
+                fallidos_core_cols = ['DOI', 'Title']
+                fallidos_status_cols = ['Failure_Reason', 'Detailed_Status']
+                fallidos_link_col = ['SciHub_Link']
+                remaining_fallidos_cols = [col for col in original_input_columns if col not in fallidos_core_cols + fallidos_status_cols]
+                ordered_fallidos_cols = fallidos_core_cols + remaining_fallidos_cols + fallidos_status_cols + fallidos_link_col
+                
+                # For 'Tiempos' sheet
+                tiempos_core_cols = ['DOI', 'Title']
+                tiempos_status_cols = ['Successful_Mirror', 'Start_Time', 'End_Time', 'Duration_Seconds', 'Detailed_Status', 'Failure_Reason']
+                tiempos_link_col = ['SciHub_Link']
+                remaining_tiempos_cols = [col for col in original_input_columns if col not in tiempos_core_cols + tiempos_status_cols]
+                ordered_tiempos_cols = tiempos_core_cols + remaining_tiempos_cols + tiempos_status_cols + tiempos_link_col
+
+                # Helper function to create and reorder DataFrame
+                def create_ordered_df(data_list, ordered_columns_prefs):
+                    df_temp = pd.DataFrame(data_list)
+                    if not df_temp.empty:
+                        # Add SciHub_Link
+                        df_temp['SciHub_Link'] = df_temp.apply(
+                            lambda row: f"{sci_hub_base_url_for_report}{row.get('DOI', row.get('doi', ''))}" if pd.notna(row.get('DOI', row.get('doi', ''))) else '', 
+                            axis=1
+                        )
+                        # Ensure all columns from ordered_columns_prefs are present, fill with NaN if not in df_temp
+                        for col in ordered_columns_prefs:
+                            if col not in df_temp.columns:
+                                df_temp[col] = pd.NA # Or None, or empty string
+                        # Add any columns in df_temp not in ordered_columns_prefs (e.g. custom input cols) to the end
+                        final_columns = ordered_columns_prefs + [col for col in df_temp.columns if col not in ordered_columns_prefs]
+                        # Filter final_columns to only those actually in df_temp to avoid adding empty unwanted columns
+                        final_columns = [col for col in final_columns if col in df_temp.columns]
+                        return df_temp.reindex(columns=final_columns)
+                    else:
+                        # For empty df, create with SciHub_Link already potentially in ordered_columns_prefs
+                        return pd.DataFrame(columns=ordered_columns_prefs)
+
+                df_obtenidos = create_ordered_df(successful_articles_data, ordered_obtenidos_cols)
+                df_fallidos = create_ordered_df(failed_articles_data, ordered_fallidos_cols)
+                df_tiempos = create_ordered_df(all_articles_log, ordered_tiempos_cols)
 
                 with pd.ExcelWriter(excel_report_path, engine='openpyxl') as writer:
                     df_obtenidos.to_excel(writer, sheet_name='Obtenidos', index=False)

@@ -5,6 +5,7 @@ import requests
 import zipfile
 import os
 import re
+import time
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
@@ -247,6 +248,10 @@ def download_pdfs_from_file():
                     final_reason = download_attempt_reason if download_attempt_reason else "No se pudo obtener contenido PDF"
                     print(f"FALLO FINAL: No se pudo descargar '{effective_title}' (DOI: {doi}). Razón: {final_reason}")
                     failed_downloads.append({'title': effective_title, 'doi': doi, 'reason': final_reason})
+                
+                # Introduce a delay before processing the next article
+                print(f"Esperando 5 segundos antes del siguiente artículo...")
+                time.sleep(5)
 
     except FileNotFoundError:
         messagebox.showerror("Error", f"No se pudo crear el archivo ZIP en la ruta especificada (Directorio no encontrado): {zip_path}")

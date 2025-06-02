@@ -188,6 +188,7 @@ def download_pdfs_from_file():
     # Outer try for main operations, ensuring cleanup happens in the finally block
     try:
         # Initial ZIP Writing and Main Download Loop
+        zip_creation_or_main_loop_error = False # Flag for critical errors
         try:
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
                 total_articles = len(df)
@@ -409,13 +410,24 @@ def download_pdfs_from_file():
                 # Introduce a delay before processing the next article (regardless of success/failure of this DOI)
                 print(f"Esperando {INTER_DOI_DELAY_SECONDS} segundos antes del siguiente artículo...")
                 time.sleep(INTER_DOI_DELAY_SECONDS)
-    
-    # --- End of Main DOI Loop ---
+            # --- End of Main DOI Loop (inside 'with zipfile... as zf:') ---
+        except FileNotFoundError:
+            messagebox.showerror("Error", f"No se pudo crear el archivo ZIP en la ruta especificada (Directorio no encontrado): {zip_path}")
+            print("Error crítico: FileNotFoundError al crear ZIP inicial. Terminando.")
+            zip_creation_or_main_loop_error = True 
+            # return # Return will be handled by checking the flag
+        except Exception as e:
+            messagebox.showerror("Error", f"Ocurrió un error inesperado durante la creación del ZIP o el primer paso de descargas: {e}")
+            print(f"Error crítico: Excepción durante ZIP inicial o descargas: {e}. Terminando.")
+            zip_creation_or_main_loop_error = True
+            # return # Return will be handled by checking the flag
 
     # --- Retry Phase for Failed Downloads ---
-    if failed_articles_data: # Only run if there are failures
-        print(f"\n{'='*20} INICIANDO FASE DE REINTENTO {'='*20}")
-        print(f"Se reintentarán {len(failed_articles_data)} artículos fallidos.")
+    # Should only run if the initial ZIP creation and main loop didn't have a critical error
+    if not zip_creation_or_main_loop_error:
+        if failed_articles_data: # Only run if there are failures
+            print(f"\n{'='*20} INICIANDO FASE DE REINTENTO {'='*20}")
+            print(f"Se reintentarán {len(failed_articles_data)} artículos fallidos.")
         
         articles_successfully_retried_ids = [] # Store DOIs of successfully retried articles
         temp_failed_articles_data_for_iteration = list(failed_articles_data) # Iterate over a copy
@@ -602,95 +614,100 @@ def download_pdfs_from_file():
                 doi_for_summary = str(failed_item.get('DOI', failed_item.get('doi', 'Unknown DOI'))).strip()
                 reason_for_summary = str(failed_item.get('Failure_Reason', 'Unknown reason from retry')).strip()
                 failed_downloads.append({'title': title_for_summary, 'doi': doi_for_summary, 'reason': reason_for_summary})
-        # --- End of Retry Phase ---
+            # --- End of Retry Phase ---
 
         # --- Summary Message Composition (after retries) ---
-        total_mb = total_downloaded_size_bytes / (1024 * 1024)
-        summary_message = (
-            f"Proceso completado.\n\n"
-            f"Descargas exitosas: {successful_downloads}\n"
-            f"Descargas fallidas: {len(failed_downloads)}\n" # This uses the updated failed_downloads list
-            f"Tamaño total de los PDFs descargados: {total_mb:.2f} MB"
-        )
-        if failed_downloads: # Use the potentially updated list
-            summary_message += "\n\nArtículos que no se pudieron descargar (después de reintentos):"
-            for item in failed_downloads:
-                summary_message += f"\n- Título: {item['title']}, DOI: {item['doi']}, Razón: {item['reason']}"
-        
-        print("\n" + "="*50)
-        print(summary_message)
-        print("="*50)
-        messagebox.showinfo("Resumen de Descarga", summary_message)
-
-        # --- Excel Report Generation ---
-        generate_excel_report = messagebox.askyesno(
-            "Generar Reporte Excel",
-            "¿Desea generar un reporte detallado en formato Excel con los resultados?"
-        )
-        if generate_excel_report:
-            excel_report_path = filedialog.asksaveasfilename(
-                title="Guardar Reporte Excel como...",
-                defaultextension=".xlsx",
-                initialfile="SciHub_Descarga_Reporte.xlsx",
-                filetypes=(("Archivos Excel", "*.xlsx"), ("Todos los archivos", "*.*"))
+        # This section, and Excel generation, should only run if no critical error occurred earlier
+        if not zip_creation_or_main_loop_error:
+            total_mb = total_downloaded_size_bytes / (1024 * 1024)
+            summary_message = (
+                f"Proceso completado.\n\n"
+                f"Descargas exitosas: {successful_downloads}\n"
+                f"Descargas fallidas: {len(failed_downloads)}\n" # This uses the updated failed_downloads list
+                f"Tamaño total de los PDFs descargados: {total_mb:.2f} MB"
             )
-            if not excel_report_path:
-                messagebox.showinfo("Información", "Guardado de reporte Excel cancelado por el usuario.")
-                print("Reporte Excel no generado (guardado cancelado).")
+            if failed_downloads: # Use the potentially updated list
+                summary_message += "\n\nArtículos que no se pudieron descargar (después de reintentos):"
+                for item in failed_downloads:
+                    summary_message += f"\n- Título: {item['title']}, DOI: {item['doi']}, Razón: {item['reason']}"
+            
+            print("\n" + "="*50)
+            print(summary_message)
+            print("="*50)
+            messagebox.showinfo("Resumen de Descarga", summary_message)
+
+            # --- Excel Report Generation ---
+            generate_excel_report = messagebox.askyesno(
+                "Generar Reporte Excel",
+                "¿Desea generar un reporte detallado en formato Excel con los resultados?"
+            )
+            if generate_excel_report:
+                excel_report_path = filedialog.asksaveasfilename(
+                    title="Guardar Reporte Excel como...",
+                    defaultextension=".xlsx",
+                    initialfile="SciHub_Descarga_Reporte.xlsx",
+                    filetypes=(("Archivos Excel", "*.xlsx"), ("Todos los archivos", "*.*"))
+                )
+                if not excel_report_path:
+                    messagebox.showinfo("Información", "Guardado de reporte Excel cancelado por el usuario.")
+                    print("Reporte Excel no generado (guardado cancelado).")
+                else:
+                    print(f"Generando reporte Excel en: {excel_report_path}")
+                    try:
+                        # Define preferred column orders
+                        obtenidos_core_cols = ['DOI', 'Title']
+                        obtenidos_status_cols = ['Successful_Mirror']
+                        obtenidos_link_col = ['SciHub_Link']
+                        remaining_obtenidos_cols = [col for col in original_input_columns if col not in obtenid_core_cols + obtenid_status_cols]
+                        ordered_obtenidos_cols = obtenid_core_cols + obtenid_status_cols + remaining_obtenidos_cols + obtenid_link_col
+
+                        fallidos_core_cols = ['DOI', 'Title']
+                        fallidos_status_cols = ['Failure_Reason', 'Detailed_Status']
+                        fallidos_link_col = ['SciHub_Link']
+                        remaining_fallidos_cols = [col for col in original_input_columns if col not in fallidos_core_cols + fallidos_status_cols]
+                        ordered_fallidos_cols = fallidos_core_cols + remaining_fallidos_cols + fallidos_status_cols + fallidos_link_col
+                        
+                        tiempos_core_cols = ['DOI', 'Title']
+                        tiempos_status_cols = ['Successful_Mirror', 'Start_Time', 'End_Time', 'Duration_Seconds', 'Detailed_Status', 'Failure_Reason']
+                        tiempos_link_col = ['SciHub_Link']
+                        remaining_tiempos_cols = [col for col in original_input_columns if col not in tiempos_core_cols + tiempos_status_cols]
+                        ordered_tiempos_cols = tiempos_core_cols + remaining_tiempos_cols + tiempos_status_cols + tiempos_link_col
+
+                        def create_ordered_df(data_list, ordered_columns_prefs):
+                            df_temp = pd.DataFrame(data_list)
+                            if not df_temp.empty:
+                                df_temp['SciHub_Link'] = df_temp.apply(
+                                    lambda row: f"{sci_hub_base_url_for_report}{row.get('DOI', row.get('doi', ''))}" if pd.notna(row.get('DOI', row.get('doi', ''))) else '', 
+                                    axis=1
+                                )
+                                for col in ordered_columns_prefs:
+                                    if col not in df_temp.columns:
+                                        df_temp[col] = pd.NA
+                                final_columns = ordered_columns_prefs + [col for col in df_temp.columns if col not in ordered_columns_prefs]
+                                final_columns = [col for col in final_columns if col in df_temp.columns]
+                                return df_temp.reindex(columns=final_columns)
+                            else:
+                                return pd.DataFrame(columns=ordered_columns_prefs)
+
+                        df_obtenidos = create_ordered_df(successful_articles_data, ordered_obtenidos_cols)
+                        df_fallidos = create_ordered_df(failed_articles_data, ordered_fallidos_cols)
+                        df_tiempos = create_ordered_df(all_articles_log, ordered_tiempos_cols)
+
+                        with pd.ExcelWriter(excel_report_path, engine='openpyxl') as writer:
+                            df_obtenidos.to_excel(writer, sheet_name='Obtenidos', index=False)
+                            df_fallidos.to_excel(writer, sheet_name='Fallidos', index=False)
+                            df_tiempos.to_excel(writer, sheet_name='Tiempos', index=False)
+                        
+                        messagebox.showinfo("Reporte Excel", f"Reporte Excel guardado exitosamente en: {excel_report_path}")
+                        print(f"Reporte Excel guardado en: {excel_report_path}")
+                    except Exception as e:
+                        messagebox.showerror("Error al Guardar Excel", f"No se pudo guardar el reporte Excel: {e}")
+                        print(f"Error al guardar Excel: {e}")
             else:
-                print(f"Generando reporte Excel en: {excel_report_path}")
-                try:
-                    # Define preferred column orders
-                    obtenidos_core_cols = ['DOI', 'Title']
-                    obtenidos_status_cols = ['Successful_Mirror']
-                    obtenidos_link_col = ['SciHub_Link']
-                    remaining_obtenidos_cols = [col for col in original_input_columns if col not in obtenid_core_cols + obtenid_status_cols]
-                    ordered_obtenidos_cols = obtenid_core_cols + obtenid_status_cols + remaining_obtenidos_cols + obtenid_link_col
+                print("Reporte Excel no generado (usuario eligió 'No').")
+        elif zip_creation_or_main_loop_error:
+             print("Proceso interrumpido debido a un error crítico durante la fase inicial. No se generará resumen ni reporte Excel.")
 
-                    fallidos_core_cols = ['DOI', 'Title']
-                    fallidos_status_cols = ['Failure_Reason', 'Detailed_Status']
-                    fallidos_link_col = ['SciHub_Link']
-                    remaining_fallidos_cols = [col for col in original_input_columns if col not in fallidos_core_cols + fallidos_status_cols]
-                    ordered_fallidos_cols = fallidos_core_cols + remaining_fallidos_cols + fallidos_status_cols + fallidos_link_col
-                    
-                    tiempos_core_cols = ['DOI', 'Title']
-                    tiempos_status_cols = ['Successful_Mirror', 'Start_Time', 'End_Time', 'Duration_Seconds', 'Detailed_Status', 'Failure_Reason']
-                    tiempos_link_col = ['SciHub_Link']
-                    remaining_tiempos_cols = [col for col in original_input_columns if col not in tiempos_core_cols + tiempos_status_cols]
-                    ordered_tiempos_cols = tiempos_core_cols + remaining_tiempos_cols + tiempos_status_cols + tiempos_link_col
-
-                    def create_ordered_df(data_list, ordered_columns_prefs):
-                        df_temp = pd.DataFrame(data_list)
-                        if not df_temp.empty:
-                            df_temp['SciHub_Link'] = df_temp.apply(
-                                lambda row: f"{sci_hub_base_url_for_report}{row.get('DOI', row.get('doi', ''))}" if pd.notna(row.get('DOI', row.get('doi', ''))) else '', 
-                                axis=1
-                            )
-                            for col in ordered_columns_prefs:
-                                if col not in df_temp.columns:
-                                    df_temp[col] = pd.NA
-                            final_columns = ordered_columns_prefs + [col for col in df_temp.columns if col not in ordered_columns_prefs]
-                            final_columns = [col for col in final_columns if col in df_temp.columns]
-                            return df_temp.reindex(columns=final_columns)
-                        else:
-                            return pd.DataFrame(columns=ordered_columns_prefs)
-
-                    df_obtenidos = create_ordered_df(successful_articles_data, ordered_obtenidos_cols)
-                    df_fallidos = create_ordered_df(failed_articles_data, ordered_fallidos_cols)
-                    df_tiempos = create_ordered_df(all_articles_log, ordered_tiempos_cols)
-
-                    with pd.ExcelWriter(excel_report_path, engine='openpyxl') as writer:
-                        df_obtenidos.to_excel(writer, sheet_name='Obtenidos', index=False)
-                        df_fallidos.to_excel(writer, sheet_name='Fallidos', index=False)
-                        df_tiempos.to_excel(writer, sheet_name='Tiempos', index=False)
-                    
-                    messagebox.showinfo("Reporte Excel", f"Reporte Excel guardado exitosamente en: {excel_report_path}")
-                    print(f"Reporte Excel guardado en: {excel_report_path}")
-                except Exception as e:
-                    messagebox.showerror("Error al Guardar Excel", f"No se pudo guardar el reporte Excel: {e}")
-                    print(f"Error al guardar Excel: {e}")
-        else:
-            print("Reporte Excel no generado (usuario eligió 'No').")
 
     finally: # This is the new outer finally for all cleanup
         print("\n--- Limpieza Final de Archivos Temporales ---")

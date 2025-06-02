@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
-import tkinter.scrolledtext as st 
+# import tkinter.scrolledtext as st # GUI logging disabled
 import pandas as pd
 import requests
 import zipfile
@@ -22,29 +22,29 @@ INTER_DOI_DELAY_SECONDS = 5
 MIRROR_SWITCH_DELAY_SECONDS = 3
 # --- End Configuration Constants ---
 
-class TextRedirector(object):
-    def __init__(self, widget, original_stdout_ref, tag="stdout"):
-        self.widget = widget
-        self.original_stdout = original_stdout_ref
-        self.tag = tag
-    def write(self, str_):
-        self.widget.configure(state='normal')
-        self.widget.insert(tk.END, str_, (self.tag,))
-        self.widget.see(tk.END)
-        self.widget.configure(state='disabled')
-        self.original_stdout.write(str_)
-        self.original_stdout.flush()
-    def flush(self):
-        self.widget.update_idletasks() 
-        self.original_stdout.flush()
+# class TextRedirector(object): # GUI logging disabled
+#     def __init__(self, widget, original_stdout_ref, tag="stdout"):
+#         self.widget = widget
+#         self.original_stdout = original_stdout_ref
+#         self.tag = tag
+#     def write(self, str_):
+#         self.widget.configure(state='normal')
+#         self.widget.insert(tk.END, str_, (self.tag,))
+#         self.widget.see(tk.END)
+#         self.widget.configure(state='disabled')
+#         self.original_stdout.write(str_)
+#         self.original_stdout.flush()
+#     def flush(self):
+#         self.widget.update_idletasks() 
+#         self.original_stdout.flush()
 
-def on_log_window_close(log_window_ref, original_stdout_ref, root_tk_instance):
-    if sys.stdout != original_stdout_ref: 
-        print("Log window closed by user. Restoring original stdout.", file=original_stdout_ref) 
-        sys.stdout = original_stdout_ref
-    if log_window_ref:
-        try: log_window_ref.destroy()
-        except tk.TclError: pass
+# def on_log_window_close(log_window_ref, original_stdout_ref, root_tk_instance): # GUI logging disabled
+#     if sys.stdout != original_stdout_ref: 
+#         print("Log window closed by user. Restoring original stdout.", file=original_stdout_ref) 
+#         sys.stdout = original_stdout_ref
+#     if log_window_ref:
+#         try: log_window_ref.destroy()
+#         except tk.TclError: pass
 
 def format_and_log_article_status(original_row_data, doi, title, current_article_num, total_articles, 
                                   successful_downloads_count_for_stats, # Count *after* this article's attempt
@@ -59,14 +59,20 @@ def format_and_log_article_status(original_row_data, doi, title, current_article
         log_lines.append(f"{retry_prefix}Artículo: {current_article_num}/{total_articles} ({buscados_percentage:.2f}%)")
         log_lines.append(f"Título: {title if title else 'N/A'}")
         
-        temp_series = pd.Series(original_row_data) # For case-insensitive get if needed
-        revista_keys = [k for k in original_row_data.keys() if str(k).lower() == 'revista']
-        fecha_pub_keys = [k for k in original_row_data.keys() if str(k).lower() == 'fecha de publicación']
+        # Prioritize "Journal/Book" for journal title
+        journal_title_val = original_row_data.get('Journal/Book', 'N/A')
+        
+        # If "Journal/Book" is not found (or has no value and resulted in 'N/A'), 
+        # then try the old 'revista' logic as a fallback.
+        if journal_title_val == 'N/A':
+            # Case-insensitive search for 'revista'
+            revista_keys = [k for k in original_row_data.keys() if str(k).lower() == 'revista']
+            journal_title_val = original_row_data.get(revista_keys[0], 'N/A') if revista_keys else 'N/A'
 
-        revista_val = original_row_data.get(revista_keys[0], 'N/A') if revista_keys else 'N/A'
+        fecha_pub_keys = [k for k in original_row_data.keys() if str(k).lower() == 'fecha de publicación']
         fecha_pub_val = original_row_data.get(fecha_pub_keys[0], 'N/A') if fecha_pub_keys else 'N/A'
         
-        log_lines.append(f"Revista: {revista_val}")
+        log_lines.append(f"Journal/Book: {journal_title_val}") # Changed label from "Revista"
         log_lines.append(f"Fecha de publicación: {fecha_pub_val}")
         log_lines.append(f"DOI: {doi}")
 
@@ -133,36 +139,44 @@ def print_to_console(message, orig_stdout):
 
 def download_pdfs_from_file():
     original_stdout = sys.stdout 
-    root = tk.Tk(); root.withdraw() 
-    log_window = None; log_text_widget = None
+    # root = tk.Tk(); root.withdraw() # GUI elements removed
+    # log_window = None; log_text_widget = None # GUI elements removed
     df = None # Initialize df to None
     temp_pdf_paths = [] # Initialize temp_pdf_paths as it's used in finally
 
+    # GUI Log window and stdout redirection are disabled.
+    # All print statements will go to the original stdout (console).
+    
     try:
-        # ... (Configuration Dialogs - as previously implemented)
-        print_to_console("DIAG: --- Iniciando Configuración ---", original_stdout)
+        # Since GUI dialogs are used, we still need a root Tk window for them,
+        # but it can be managed more minimally if no log window is tied to it.
+        # For now, assuming dialogs are essential and keeping root.
+        root = tk.Tk()
+        root.withdraw() # Keep it hidden as it's mainly for dialogs
+
+        print("DIAG: --- Iniciando Configuración ---") # No longer using print_to_console
         input_file_path = filedialog.askopenfilename(title="Seleccionar archivo con DOIs (Excel o CSV)", filetypes=(("Archivos Excel", "*.xlsx *.xls"), ("Archivos CSV", "*.csv"), ("Todos los archivos", "*.*")))
-        print_to_console(f"DIAG: After input_file_path dialog, path: {input_file_path}", original_stdout)
+        print(f"DIAG: After input_file_path dialog, path: {input_file_path}")
         if not input_file_path: messagebox.showinfo("Información", "No se seleccionó ningún archivo de entrada. El programa terminará."); return
-        print_to_console("DIAG: Before zip_path dialog", original_stdout)
+        print("DIAG: Before zip_path dialog")
         zip_path = filedialog.asksaveasfilename(title="Guardar archivo ZIP como...", defaultextension=".zip", filetypes=(("Archivos ZIP", "*.zip"), ("Todos los archivos", "*.*")))
-        print_to_console(f"DIAG: After zip_path dialog, path: {zip_path}", original_stdout)
+        print(f"DIAG: After zip_path dialog, path: {zip_path}")
         if not zip_path: messagebox.showinfo("Información", "No se especificó la ubicación para guardar el ZIP. El programa terminará."); return
-        print_to_console("DIAG: Before excel_report_path_config dialog", original_stdout)
+        print("DIAG: Before excel_report_path_config dialog")
         excel_report_path_config = filedialog.asksaveasfilename(title="Guardar Reporte Excel Opcional como...", defaultextension=".xlsx", initialfile="SciHub_Descarga_Reporte.xlsx", filetypes=(("Archivos Excel", "*.xlsx"), ("Todos los archivos", "*.*")))
-        print_to_console(f"DIAG: After excel_report_path_config dialog, path: {excel_report_path_config}", original_stdout)
-        if not excel_report_path_config: excel_report_path_config = ""; print_to_console("DIAG: Ruta para reporte Excel no especificada.", original_stdout)
-        print_to_console("DIAG: Before user_inter_doi_delay dialog", original_stdout)
+        print(f"DIAG: After excel_report_path_config dialog, path: {excel_report_path_config}")
+        if not excel_report_path_config: excel_report_path_config = ""; print("DIAG: Ruta para reporte Excel no especificada.")
+        print("DIAG: Before user_inter_doi_delay dialog")
         user_inter_doi_delay = simpledialog.askinteger("Configurar Retraso Inter-DOI", "Ingrese el tiempo de espera (segundos) entre cada DOI:", initialvalue=INTER_DOI_DELAY_SECONDS, minvalue=0 )
-        print_to_console(f"DIAG: After user_inter_doi_delay dialog, value: {user_inter_doi_delay}", original_stdout)
+        print(f"DIAG: After user_inter_doi_delay dialog, value: {user_inter_doi_delay}")
         if user_inter_doi_delay is None: user_inter_doi_delay = INTER_DOI_DELAY_SECONDS; messagebox.showinfo("Información", f"Retraso Inter-DOI no modificado, se usará el predeterminado: {user_inter_doi_delay}s")
-        print_to_console("DIAG: Before user_mirror_switch_delay dialog", original_stdout)
+        print("DIAG: Before user_mirror_switch_delay dialog")
         user_mirror_switch_delay = simpledialog.askinteger("Configurar Retraso Cambio de Mirror", "Ingrese el tiempo de espera (segundos) al cambiar de mirror:", initialvalue=MIRROR_SWITCH_DELAY_SECONDS, minvalue=0)
-        print_to_console(f"DIAG: After user_mirror_switch_delay dialog, value: {user_mirror_switch_delay}", original_stdout)
+        print(f"DIAG: After user_mirror_switch_delay dialog, value: {user_mirror_switch_delay}")
         if user_mirror_switch_delay is None: user_mirror_switch_delay = MIRROR_SWITCH_DELAY_SECONDS; messagebox.showinfo("Información", f"Retraso por cambio de Mirror no modificado, se usará el predeterminado: {user_mirror_switch_delay}s")
-        print_to_console("DIAG: Before user_mirror_list_str dialog", original_stdout)
+        print("DIAG: Before user_mirror_list_str dialog")
         user_mirror_list_str = simpledialog.askstring("Configurar Mirrors de Sci-Hub (Obligatorio)", "Ingrese URLs de mirrors Sci-Hub, separadas por comas.\n(ej: https://sci-hub.se/,https://sci-hub.st/)\nESTOS SERÁN LOS ÚNICOS MIRRORS UTILIZADOS.\nDejar vacío para usar default (https://sci-hub.se/).")
-        print_to_console(f"DIAG: After user_mirror_list_str dialog, value: {user_mirror_list_str}", original_stdout)
+        print(f"DIAG: After user_mirror_list_str dialog, value: {user_mirror_list_str}")
         user_defined_mirrors = []
         if user_mirror_list_str is None: messagebox.showerror("Configuración Requerida", "Configuración de mirrors cancelada. Terminando."); return
         if not user_mirror_list_str.strip(): messagebox.showinfo("Información de Mirrors", "No se ingresaron mirrors. Usando default: https://sci-hub.se/"); user_defined_mirrors = ["https://sci-hub.se/"]
@@ -174,15 +188,15 @@ def download_pdfs_from_file():
                 user_defined_mirrors.append(mirror_url)
             if not user_defined_mirrors: messagebox.showerror("Error de Configuración", "Lista de mirrors vacía o inválida. Terminando."); return
         sci_hub_base_url_for_report = user_defined_mirrors[0]
-        print_to_console("DIAG: Before root.update() after all dialogs.", original_stdout); root.update(); print_to_console("DIAG: After root.update() after all dialogs.", original_stdout)
-        print_to_console("DIAG: All dialogs complete. Before log_window creation.", original_stdout); log_window = tk.Toplevel(root); print_to_console("DIAG: After log_window = tk.Toplevel(root)", original_stdout)
-        log_window.title("Log de Proceso de Descarga"); log_window.geometry("800x600")
-        print_to_console("DIAG: Before log_text_widget creation", original_stdout); log_text_widget = st.ScrolledText(log_window, wrap=tk.WORD, state='disabled'); log_text_widget.pack(padx=10, pady=10, fill=tk.BOTH, expand=True); print_to_console("DIAG: After log_text_widget creation", original_stdout)
-        log_window.protocol("WM_DELETE_WINDOW", lambda: on_log_window_close(log_window, original_stdout, root))
-        print_to_console("DIAG: Before sys.stdout redirection", original_stdout); sys.stdout = TextRedirector(log_text_widget, original_stdout) ; print_to_console("DIAG: After sys.stdout redirection. Subsequent app prints go to GUI and console.", original_stdout) 
+        
+        # print_to_console("DIAG: Before root.update() after all dialogs.", original_stdout); root.update(); print_to_console("DIAG: After root.update() after all dialogs.", original_stdout) # GUI logging disabled
+        # print_to_console("DIAG: All dialogs complete. Before log_window creation.", original_stdout); log_window = tk.Toplevel(root); print_to_console("DIAG: After log_window = tk.Toplevel(root)", original_stdout) # GUI logging disabled
+        # log_window.title("Log de Proceso de Descarga"); log_window.geometry("800x600") # GUI logging disabled
+        # print_to_console("DIAG: Before log_text_widget creation", original_stdout); log_text_widget = st.ScrolledText(log_window, wrap=tk.WORD, state='disabled'); log_text_widget.pack(padx=10, pady=10, fill=tk.BOTH, expand=True); print_to_console("DIAG: After log_text_widget creation", original_stdout) # GUI logging disabled
+        # log_window.protocol("WM_DELETE_WINDOW", lambda: on_log_window_close(log_window, original_stdout, root)) # GUI logging disabled
+        # print_to_console("DIAG: Before sys.stdout redirection", original_stdout); sys.stdout = TextRedirector(log_text_widget, original_stdout) ; print_to_console("DIAG: After sys.stdout redirection. Subsequent app prints go to GUI and console.", original_stdout) # GUI logging disabled
         
         print("\n--- Configuración Aplicada ---")
-        # ... (print config summary as before) ...
         print(f"Archivo de entrada: {input_file_path}")
         print(f"Archivo ZIP de salida: {zip_path}")
         if excel_report_path_config: print(f"Archivo de reporte Excel: {excel_report_path_config}")
@@ -191,7 +205,7 @@ def download_pdfs_from_file():
         print(f"Retraso Cambio de Mirror: {user_mirror_switch_delay}s")
         print(f"Mirrors Sci-Hub a utilizar: {', '.join(user_defined_mirrors)}")
         print("-----------------------------------------------------\n")
-        if log_window and log_window.winfo_exists(): log_window.update_idletasks()
+        # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
 
         session = requests.Session(); session.headers.update({'User-Agent': 'Mozilla/5.0...'})
         all_articles_log = []; successful_articles_data = []; failed_articles_data = []; original_input_columns = []
@@ -223,7 +237,7 @@ def download_pdfs_from_file():
 
         except Exception as e: # Catch any exception from file reading block
             print(f"Error fatal al leer archivo de entrada: {e}") 
-            if log_window and log_window.winfo_exists(): log_window.destroy() 
+            # if log_window and log_window.winfo_exists(): log_window.destroy() # GUI logging disabled
             messagebox.showerror("Error Crítico de Archivo", f"No se pudo leer el archivo de entrada: {e}\nEl programa terminará.")
             return # Exit if file reading fails
         
@@ -231,7 +245,7 @@ def download_pdfs_from_file():
         # or a new path was introduced. This ensures we don't proceed.
         if df is None:
             print("Error Crítico: DataFrame (df) no fue inicializado. Terminando proceso.")
-            if log_window and log_window.winfo_exists(): log_window.destroy()
+            # if log_window and log_window.winfo_exists(): log_window.destroy() # GUI logging disabled
             messagebox.showerror("Error Crítico", "DataFrame no pudo ser cargado. El programa terminará.")
             return
 
@@ -261,7 +275,7 @@ def download_pdfs_from_file():
                         end_time = datetime.now() # Ensure end_time for log
                         log_entry = {**original_row_data, 'Start_Time': start_time.strftime("%Y-%m-%d %H:%M:%S"), 'End_Time': end_time.strftime("%Y-%m-%d %H:%M:%S"), 'Duration_Seconds': (end_time - start_time).total_seconds(), 'Detailed_Status': detailed_status_for_log, 'Failure_Reason': failure_reason_for_report, 'Successful_Mirror': ""}
                         all_articles_log.append(log_entry); failed_articles_data.append({**original_row_data, 'Failure_Reason': failure_reason_for_report, 'Detailed_Status': detailed_status_for_log, 'original_index': index})
-                        if log_window and log_window.winfo_exists(): log_window.update_idletasks()
+                        # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
                         time.sleep(user_inter_doi_delay) # Still sleep for skipped
                         continue
                     
@@ -340,7 +354,7 @@ def download_pdfs_from_file():
 
                     all_articles_log.append({**original_row_data, 'Start_Time': start_time.strftime("%Y-%m-%d %H:%M:%S"), 'End_Time': end_time.strftime("%Y-%m-%d %H:%M:%S"), 'Duration_Seconds': (end_time - start_time).total_seconds(), 'Detailed_Status': log_entry_detailed_status, 'Failure_Reason': log_entry_failure_reason, 'Successful_Mirror': successful_mirror_for_this_doi })
                     
-                    if log_window and log_window.winfo_exists(): log_window.update_idletasks() 
+                    # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
                     if current_article_num_for_log < total_articles : time.sleep(user_inter_doi_delay) # Sleep if not the last article
 
         # ... (except FileNotFoundError, Exception for zip as before) ...
@@ -350,8 +364,8 @@ def download_pdfs_from_file():
 
         if not zip_creation_or_main_loop_error:
             if failed_articles_data: 
-                # ... (Retry phase intro print)
-                if log_window and log_window.winfo_exists(): log_window.update_idletasks()
+                print("\n--- Iniciando Fase de Reintento para Artículos Fallidos ---")
+                # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
             
             articles_successfully_retried_ids = [] 
             temp_failed_articles_data_for_iteration = list(failed_articles_data) 
@@ -396,7 +410,7 @@ def download_pdfs_from_file():
                         except Exception as e: mirror_reason_str_retry = f"RETRY: Error fallback: {str(e)[:50]}"; temp_detailed_status_for_retry_log = f"Failure_RETRY_direct_DOI_Exception_from_{current_mirror_base_url_retry}"
                     mirror_attempts_details_for_retry.append((current_mirror_base_url_retry, mirror_status_str_retry, mirror_reason_str_retry))
                     temp_failure_reason_for_retry_log = mirror_reason_str_retry
-                    if log_window and log_window.winfo_exists(): log_window.update_idletasks() 
+                    # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
                     if pdf_content_retry: 
                         retry_successful_this_doi = True; successful_mirror_for_retry = current_mirror_base_url_retry; temp_failure_reason_for_retry_log = ""; overall_retry_status = "OBTENIDO"; break 
                     else: 
@@ -440,12 +454,12 @@ def download_pdfs_from_file():
                 # Pass original_row_data from failed_article_entry for Revista, Fecha Pub, etc.
                 format_and_log_article_status(failed_article_entry, doi_to_retry, effective_title_for_retry, current_article_num_for_log_retry, total_articles, successful_downloads, mirror_attempts_details_for_retry, overall_retry_status, user_inter_doi_delay, is_retry=True)
 
-                if log_window and log_window.winfo_exists(): log_window.update_idletasks() 
+                # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
                 if retry_idx < len(temp_failed_articles_data_for_iteration) - 1: time.sleep(user_inter_doi_delay)
             
             if articles_successfully_retried_ids: failed_articles_data = [item for item in failed_articles_data if str(item.get('DOI', item.get('doi', ''))).strip() not in articles_successfully_retried_ids]
-            # ... (rest of retry phase and summary/Excel as before)
-            if log_window and log_window.winfo_exists(): log_window.update_idletasks()
+            
+            # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
             failed_downloads_summary_list = [{'title': str(item.get('Title',item.get('title','N/A'))).strip(), 'doi': str(item.get('DOI',item.get('doi','N/A'))).strip(), 'reason': str(item.get('Failure_Reason','N/A')).strip()} for item in failed_articles_data]
             total_mb = total_downloaded_size_bytes / (1024 * 1024)
             summary_message = (f"Proceso completado.\n\nDescargas exitosas: {successful_downloads}\nDescargas fallidas: {len(failed_downloads_summary_list)}\n" f"Tamaño total PDFs: {total_mb:.2f} MB")
@@ -454,8 +468,8 @@ def download_pdfs_from_file():
                 for item in failed_downloads_summary_list:
                     summary_message += f"\n- Título: {item['title']}, DOI: {item['doi']}, Razón: {item['reason']}"
             print("\n" + "="*50); print(summary_message); print("="*50); 
-            if log_window and log_window.winfo_exists(): log_window.update_idletasks() 
-            messagebox.showinfo("Resumen Descarga", summary_message)
+            # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
+            messagebox.showinfo("Resumen Descarga", summary_message) # Keep messagebox for summary
             generate_excel_report_prompt = messagebox.askyesno("Generar Reporte Excel", "¿Desea generar un reporte Excel detallado?")
             if generate_excel_report_prompt:
                 excel_report_path_to_use = excel_report_path_config
@@ -465,7 +479,7 @@ def download_pdfs_from_file():
                         excel_report_path_to_use = filedialog.asksaveasfilename(title="Guardar Reporte Excel en ruta alternativa...", defaultextension=".xlsx", initialfile="SciHub_Descarga_Reporte_Alternativo.xlsx", filetypes=(("Archivos Excel", "*.xlsx"), ("Todos los archivos", "*.*")))
                 if excel_report_path_to_use:
                     print(f"Generando reporte Excel en: {excel_report_path_to_use}")
-                    if log_window and log_window.winfo_exists(): log_window.update_idletasks()
+                    # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
                     try:
                         ob_cols = ['DOI','Title','Successful_Mirror'] + [c for c in original_input_columns if c not in ['DOI','Title','Successful_Mirror']] + ['SciHub_Link']
                         fa_cols = ['DOI','Title'] + [c for c in original_input_columns if c not in ['DOI','Title','Failure_Reason','Detailed_Status']] + ['Failure_Reason','Detailed_Status','SciHub_Link']
@@ -494,34 +508,61 @@ def download_pdfs_from_file():
         elif zip_creation_or_main_loop_error: print("Proceso interrumpido por error crítico inicial. No se generará resumen ni Excel.")
     
     finally: 
-        restored_to_original_console = False
-        if isinstance(sys.stdout, TextRedirector): 
-            sys.stdout = original_stdout
-            restored_to_original_console = True
-            print("\n--- Limpieza Final de Archivos Temporales (consola original) ---", file=original_stdout)
-        else: 
-            print("\n--- Limpieza Final de Archivos Temporales ---", file=original_stdout)
+        # restored_to_original_console = False # Not needed, stdout not redirected
+        # Ensure stdout is the original, in case it was somehow still a TextRedirector
+        # (though it shouldn't be if TextRedirector class and its usage are commented out)
+        if hasattr(original_stdout, 'write'): # Check if original_stdout was captured
+             if sys.stdout != original_stdout:
+                 sys.stdout = original_stdout
+                 print("\n--- stdout restaurado a la consola original durante la limpieza final ---", file=original_stdout)
+
+        print("\n--- Limpieza Final de Archivos Temporales ---", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
         
-        # temp_pdf_paths is guaranteed to be defined (initialized as [] at the start)
         for temp_path in temp_pdf_paths: 
             try: 
                 os.remove(temp_path)
-                print(f"Eliminado temp: {temp_path}", file=original_stdout)
+                print(f"Eliminado temp: {temp_path}", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
             except OSError as e: 
-                print(f"Error eliminando temp {temp_path}: {e}", file=original_stdout)
+                print(f"Error eliminando temp {temp_path}: {e}", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
         
         temp_dir_to_check = "temp_scihub_pdfs"
         if os.path.exists(temp_dir_to_check) and not os.listdir(temp_dir_to_check):
-            try: os.rmdir(temp_dir_to_check); print(f"Eliminado dir temp: {temp_dir_to_check}", file=original_stdout)
-            except OSError as e: print(f"Error eliminando dir temp {temp_dir_to_check}: {e}", file=original_stdout)
-        if restored_to_original_console: print("--- Limpieza Finalizada (consola original) ---", file=original_stdout)
-        else: print("--- Limpieza Finalizada ---", file=original_stdout)
-        if log_window: 
+            try: os.rmdir(temp_dir_to_check); print(f"Eliminado dir temp: {temp_dir_to_check}", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
+            except OSError as e: print(f"Error eliminando dir temp {temp_dir_to_check}: {e}", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
+        
+        print("--- Limpieza Finalizada ---", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
+        
+        # if log_window: # GUI logging disabled
+        #     try:
+        #         if log_window.winfo_exists(): log_window.destroy()
+        #     except tk.TclError: pass 
+        
+        # Destroy the main hidden Tkinter window if it exists
+        if 'root' in locals() and isinstance(root, tk.Tk):
             try:
-                if log_window.winfo_exists(): log_window.destroy()
-            except tk.TclError: pass 
+                root.destroy()
+            except tk.TclError:
+                pass
+
 
 if __name__ == "__main__":
+    # Store the true original stdout at the very beginning if not already done for the main function
+    # This is a fallback if download_pdfs_from_file itself had an issue before original_stdout was set.
+    # However, original_stdout inside download_pdfs_from_file should be sys.__stdout__ if not redirected.
+    # The check `isinstance(sys.stdout, TextRedirector)` is no longer relevant if TextRedirector is removed.
+    
+    # The critical part is ensuring sys.stdout is sys.__stdout__ if it got changed.
+    # Since TextRedirector is commented out, sys.stdout should not be an instance of it.
+    # The `finally` block in `download_pdfs_from_file` now tries to restore original_stdout.
+    # A final check here could be made, but might be redundant if `download_pdfs_from_file` handles it.
+    
+    # Safest is to assume download_pdfs_from_file cleans up its own stdout if it changed it.
+    # If TextRedirector and its instantiation are fully removed, sys.stdout should remain as console.
     download_pdfs_from_file()
-    if isinstance(sys.stdout, TextRedirector): sys.stdout = sys.__stdout__ 
+    # No need to check for TextRedirector instance if it's removed.
+    # if isinstance(sys.stdout, TextRedirector) and hasattr(sys.stdout, 'original_stdout'):
+    #    sys.stdout = sys.stdout.original_stdout # Restore if it was a TextRedirector
+    # elif isinstance(sys.stdout, TextRedirector): # Fallback if original_stdout attribute missing
+    #    sys.stdout = sys.__stdout__
+
     print("\nScript finalizado.")

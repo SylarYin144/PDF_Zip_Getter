@@ -135,6 +135,8 @@ def download_pdfs_from_file():
     original_stdout = sys.stdout 
     root = tk.Tk(); root.withdraw() 
     log_window = None; log_text_widget = None
+    df = None # Initialize df to None
+    temp_pdf_paths = [] # Initialize temp_pdf_paths as it's used in finally
 
     try:
         # ... (Configuration Dialogs - as previously implemented)
@@ -192,28 +194,53 @@ def download_pdfs_from_file():
         if log_window and log_window.winfo_exists(): log_window.update_idletasks()
 
         session = requests.Session(); session.headers.update({'User-Agent': 'Mozilla/5.0...'})
-        all_articles_log = []; successful_articles_data = []; failed_articles_data = []; original_input_columns = [] 
+        all_articles_log = []; successful_articles_data = []; failed_articles_data = []; original_input_columns = []
         
         try: # File reading try block
-            # ... (file reading logic as before) ...
             file_extension = os.path.splitext(input_file_path)[1].lower()
             if file_extension in ['.xlsx', '.xls']:
-                try: df = pd.read_excel(input_file_path); # ...
-                except Exception as e: messagebox.showerror("Error de Excel", f"Error al leer Excel: {e}"); raise
-            # ... (rest of file reading as before)
-            original_input_columns = [col for col in df.columns if col not in ['DOI', 'Title']] # Ensure this is after df is loaded
+                try: 
+                    df = pd.read_excel(input_file_path)
+                except Exception as e: 
+                    messagebox.showerror("Error de Excel", f"Error al leer Excel: {e}")
+                    raise # Re-raise to be caught by the outer exception handler for file reading
+            elif file_extension == '.csv': # Explicitly handle CSV
+                try:
+                    df = pd.read_csv(input_file_path)
+                except Exception as e:
+                    messagebox.showerror("Error de CSV", f"Error al leer CSV: {e}")
+                    raise # Re-raise
+            else:
+                messagebox.showerror("Error de Archivo", f"Tipo de archivo no soportado: {file_extension}\nPor favor, use Excel o CSV.")
+                # Set df to None or raise an error to ensure it's handled before use
+                # Raising an error is cleaner to be caught by the existing handler.
+                raise ValueError(f"Tipo de archivo no soportado: {file_extension}")
+
+            if df is not None: # Proceed only if df was loaded
+                original_input_columns = [col for col in df.columns if col not in ['DOI', 'Title']]
+            else: # Should not be reached if non-supported file types raise an error
+                raise ValueError("DataFrame no fue cargado correctamente.")
+
         except Exception as e: # Catch any exception from file reading block
-            print(f"Error fatal al leer archivo de entrada: {e}") # Goes to log/console
-            if log_window and log_window.winfo_exists(): log_window.destroy() # Clean up log window
+            print(f"Error fatal al leer archivo de entrada: {e}") 
+            if log_window and log_window.winfo_exists(): log_window.destroy() 
             messagebox.showerror("Error Crítico de Archivo", f"No se pudo leer el archivo de entrada: {e}\nEl programa terminará.")
             return # Exit if file reading fails
+        
+        # Crucial check: If df is still None here, it means file reading failed in a way not caught above,
+        # or a new path was introduced. This ensures we don't proceed.
+        if df is None:
+            print("Error Crítico: DataFrame (df) no fue inicializado. Terminando proceso.")
+            if log_window and log_window.winfo_exists(): log_window.destroy()
+            messagebox.showerror("Error Crítico", "DataFrame no pudo ser cargado. El programa terminará.")
+            return
 
-        successful_downloads = 0; failed_downloads_summary_list = []; temp_pdf_paths = []; total_downloaded_size_bytes = 0
+        successful_downloads = 0; failed_downloads_summary_list = []; total_downloaded_size_bytes = 0 # temp_pdf_paths already initialized
         zip_creation_or_main_loop_error = False 
 
         try: # Main processing try (zip creation and DOI loops)
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                total_articles = len(df)
+                total_articles = len(df) # df should be valid here
                 for index, row in df.iterrows():
                     original_row_data = row.to_dict(); start_time = datetime.now()
                     doi = str(original_row_data.get('DOI', original_row_data.get('doi', ''))).strip()
@@ -467,13 +494,22 @@ def download_pdfs_from_file():
         elif zip_creation_or_main_loop_error: print("Proceso interrumpido por error crítico inicial. No se generará resumen ni Excel.")
     
     finally: 
-        # ... (finally block as before) ...
         restored_to_original_console = False
-        if isinstance(sys.stdout, TextRedirector): sys.stdout = original_stdout; restored_to_original_console = True; print("\n--- Limpieza Final de Archivos Temporales (consola original) ---", file=original_stdout)
-        else: print("\n--- Limpieza Final de Archivos Temporales ---", file=original_stdout)
-        for temp_path in temp_pdf_paths:
-            try: os.remove(temp_path); print(f"Eliminado temp: {temp_path}", file=original_stdout)
-            except OSError as e: print(f"Error eliminando temp {temp_path}: {e}", file=original_stdout)
+        if isinstance(sys.stdout, TextRedirector): 
+            sys.stdout = original_stdout
+            restored_to_original_console = True
+            print("\n--- Limpieza Final de Archivos Temporales (consola original) ---", file=original_stdout)
+        else: 
+            print("\n--- Limpieza Final de Archivos Temporales ---", file=original_stdout)
+        
+        # temp_pdf_paths is guaranteed to be defined (initialized as [] at the start)
+        for temp_path in temp_pdf_paths: 
+            try: 
+                os.remove(temp_path)
+                print(f"Eliminado temp: {temp_path}", file=original_stdout)
+            except OSError as e: 
+                print(f"Error eliminando temp {temp_path}: {e}", file=original_stdout)
+        
         temp_dir_to_check = "temp_scihub_pdfs"
         if os.path.exists(temp_dir_to_check) and not os.listdir(temp_dir_to_check):
             try: os.rmdir(temp_dir_to_check); print(f"Eliminado dir temp: {temp_dir_to_check}", file=original_stdout)

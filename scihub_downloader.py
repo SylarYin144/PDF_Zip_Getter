@@ -370,8 +370,10 @@ def download_pdfs_from_file():
                     mirror_attempts_details_for_retry.append((current_mirror_base_url_retry, mirror_status_str_retry, mirror_reason_str_retry))
                     temp_failure_reason_for_retry_log = mirror_reason_str_retry
                     if log_window and log_window.winfo_exists(): log_window.update_idletasks() 
-                    if pdf_content_retry: retry_successful_this_doi = True; successful_mirror_for_retry = current_mirror_base_url_retry; temp_failure_reason_for_retry_log = ""; overall_retry_status = "OBTENIDO"; break 
-                    else: if mirror_idx_retry < len(mirrors_for_retry) - 1: time.sleep(user_mirror_switch_delay)
+                    if pdf_content_retry: 
+                        retry_successful_this_doi = True; successful_mirror_for_retry = current_mirror_base_url_retry; temp_failure_reason_for_retry_log = ""; overall_retry_status = "OBTENIDO"; break 
+                    else: 
+                        if mirror_idx_retry < len(mirrors_for_retry) - 1: time.sleep(user_mirror_switch_delay)
                 
                 retry_end_time_actual_attempt = datetime.now()
                 original_article_log_entry = next((log for log in all_articles_log if str(log.get('DOI', log.get('doi', ''))).strip() == doi_to_retry), None)
@@ -420,7 +422,10 @@ def download_pdfs_from_file():
             failed_downloads_summary_list = [{'title': str(item.get('Title',item.get('title','N/A'))).strip(), 'doi': str(item.get('DOI',item.get('doi','N/A'))).strip(), 'reason': str(item.get('Failure_Reason','N/A')).strip()} for item in failed_articles_data]
             total_mb = total_downloaded_size_bytes / (1024 * 1024)
             summary_message = (f"Proceso completado.\n\nDescargas exitosas: {successful_downloads}\nDescargas fallidas: {len(failed_downloads_summary_list)}\n" f"Tamaño total PDFs: {total_mb:.2f} MB")
-            if failed_downloads_summary_list: summary_message += "\n\nArtículos no descargados (post-reintentos):"; [summary_message := summary_message + f"\n- Título: {item['title']}, DOI: {item['doi']}, Razón: {item['reason']}" for item in failed_downloads_summary_list] # type: ignore
+            if failed_downloads_summary_list:
+                summary_message += "\n\nArtículos no descargados (post-reintentos):"
+                for item in failed_downloads_summary_list:
+                    summary_message += f"\n- Título: {item['title']}, DOI: {item['doi']}, Razón: {item['reason']}"
             print("\n" + "="*50); print(summary_message); print("="*50); 
             if log_window and log_window.winfo_exists(): log_window.update_idletasks() 
             messagebox.showinfo("Resumen Descarga", summary_message)

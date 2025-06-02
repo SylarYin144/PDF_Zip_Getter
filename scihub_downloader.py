@@ -5,6 +5,8 @@ import requests
 import zipfile
 import os
 import re
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
 def clean_filename(title):
     """
@@ -13,6 +15,44 @@ def clean_filename(title):
     """
     return re.sub(r'[\\/*?:"<>|]', '_', title)
 
+def extract_pdf_link_from_html(article_page_url, session):
+    """
+    Extrae el enlace directo al PDF desde el HTML de la página del artículo en Sci-Hub.
+    """
+    print(f"Fetching HTML page: {article_page_url}")
+    try:
+        response = session.get(article_page_url, timeout=30)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        # Buscar iframe con id="pdf"
+        iframe = soup.find('iframe', id='pdf')
+        if iframe and iframe.get('src'):
+            pdf_src = iframe['src']
+            print(f"Found PDF source in iframe: {pdf_src}")
+            if pdf_src.startswith('//'):
+                return 'https:' + pdf_src
+            elif pdf_src.startswith('/'): # En caso de rutas relativas al servidor
+                 return urljoin(article_page_url, pdf_src)
+            return pdf_src
+
+        # Fallback: Buscar embed tag
+        embed = soup.find('embed', attrs={'type': 'application/pdf'})
+        if embed and embed.get('src'):
+            pdf_src = embed['src']
+            print(f"Found PDF source in embed tag: {pdf_src}")
+            # Los src de embed pueden ser relativos a la URL base de la página del artículo
+            return urljoin(article_page_url, pdf_src)
+
+        print(f"Could not find PDF source in iframe or embed tag for {article_page_url}")
+        return None
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching HTML page {article_page_url}: {e}")
+        return None
+    except Exception as e:
+        print(f"An unexpected error occurred while extracting PDF link from {article_page_url}: {e}")
+        return None
+
 def download_pdfs_from_file():
     """
     Función principal para descargar PDFs desde un archivo Excel o CSV de DOIs.
@@ -20,6 +60,10 @@ def download_pdfs_from_file():
     # Inicializar Tkinter (necesario para los diálogos)
     root = tk.Tk()
     root.withdraw()  # Ocultar la ventana principal de Tkinter
+
+    # Initialize requests session
+    session = requests.Session()
+    session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'})
 
     # 1. Entrada de URL de Sci-Hub por el Usuario
     default_sci_hub_url = "https://sci-hub.se/"
@@ -100,76 +144,109 @@ def download_pdfs_from_file():
     successful_downloads = 0
     failed_downloads = []
     temp_pdf_paths = [] # Para almacenar rutas de PDFs temporales
-    total_downloaded_size_bytes = 0 # 3. Para calcular el tamaño total
+    total_downloaded_size_bytes = 0
 
-    # Crear archivo ZIP
     try:
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             total_articles = len(df)
             for index, row in df.iterrows():
-                doi = str(row.get('DOI', '')).strip() # Usar .get para evitar KeyError si la columna no existe (aunque ya se verificó)
+                doi = str(row.get('DOI', '')).strip()
                 title = str(row.get('Title', '')).strip()
-                
-                if not doi or not title:
-                    print(f"Advertencia: Fila {index+2} (archivo original) ignorada por DOI o Título vacío.")
-                    failed_downloads.append({'title': title or "Título Desconocido", 'doi': doi or "DOI Desconocido", 'reason': "DOI o Título vacío"})
+
+                if not doi: # Title can be generated from DOI if empty
+                    print(f"Advertencia: Fila {index+2} (archivo original) ignorada por DOI vacío.")
+                    failed_downloads.append({'title': title or "Título Desconocido", 'doi': "DOI Desconocido", 'reason': "DOI vacío"})
                     continue
-
-                print(f"\nProcesando artículo ({index + 1}/{total_articles}): {title if title else 'Sin Título'}")
                 
-                # Si el título está vacío después de todo, usar el DOI para el nombre del archivo
-                # Esto no debería ocurrir si la comprobación anterior de 'not title' funciona.
-                # Pero como defensa adicional:
-                effective_title = title if title else doi 
+                effective_title = title if title else doi
                 clean_title_for_filename = clean_filename(effective_title)
+                pdf_filename_in_zip = clean_title_for_filename[:150] + ".pdf"
                 
-                pdf_filename_in_zip = clean_title_for_filename[:150] + ".pdf" 
+                print(f"\nProcesando artículo ({index + 1}/{total_articles}): {effective_title}")
+                
                 full_sci_hub_url = f"{sci_hub_base_url}{doi}"
+                pdf_content = None
+                download_attempt_reason = ""
 
-                print(f"Intentando descargar desde: {full_sci_hub_url}")
+                # Primary Download Attempt using extracted link
+                print(f"Intentando extraer enlace PDF desde: {full_sci_hub_url}")
+                actual_pdf_download_url = extract_pdf_link_from_html(full_sci_hub_url, session)
 
-                try:
-                    # Intentar descargar el PDF
-                    response = requests.get(full_sci_hub_url, timeout=30, headers={'User-Agent': 'Mozilla/5.0'})
-                    response.raise_for_status() 
+                if actual_pdf_download_url:
+                    print(f"Intentando descargar PDF desde enlace extraído: {actual_pdf_download_url}")
+                    try:
+                        response = session.get(actual_pdf_download_url, timeout=60) # Increased timeout for direct PDF
+                        response.raise_for_status()
+                        content_type = response.headers.get('Content-Type', '').lower()
+                        if 'application/pdf' in content_type:
+                            pdf_content = response.content
+                            print(f"ÉXITO (enlace extraído): PDF obtenido para '{effective_title}'.")
+                            download_attempt_reason = "Éxito vía enlace extraído"
+                        else:
+                            print(f"FALLO (enlace extraído): Contenido no es PDF desde {actual_pdf_download_url}. Content-Type: {content_type}")
+                            download_attempt_reason = f"Contenido no PDF desde enlace extraído ({content_type})"
+                    except requests.exceptions.RequestException as e:
+                        print(f"FALLO (enlace extraído): No se pudo descargar desde {actual_pdf_download_url}. Error: {e}")
+                        download_attempt_reason = f"Error descargando de enlace extraído: {e}"
+                    except Exception as e:
+                        print(f"FALLO INESPERADO (enlace extraído): Error descargando desde {actual_pdf_download_url}. Error: {e}")
+                        download_attempt_reason = f"Error inesperado (enlace extraído): {e}"
 
-                    content_type = response.headers.get('Content-Type', '').lower()
+                # Fallback Download Attempt (direct access to Sci-Hub URL)
+                if not pdf_content:
+                    if actual_pdf_download_url: # Fallback because previous attempt failed
+                        print(f"Fallback: Intentando descargar directamente desde {full_sci_hub_url} porque el enlace extraído falló.")
+                    else: # Fallback because no link was extracted
+                        print(f"Fallback: No se pudo extraer enlace PDF. Intentando descargar directamente desde {full_sci_hub_url}")
                     
-                    if 'application/pdf' in content_type:
-                        # Guardar temporalmente el PDF
-                        # Crear un directorio temporal si no existe para los PDFs
-                        temp_dir = "temp_scihub_pdfs"
-                        if not os.path.exists(temp_dir):
-                            os.makedirs(temp_dir)
-                        temp_pdf_path = os.path.join(temp_dir, f"temp_{os.getpid()}_{index}_{pdf_filename_in_zip}")
-                        
-                        with open(temp_pdf_path, 'wb') as f:
-                            f.write(response.content)
-                        
-                        # 3. Obtener tamaño del archivo y sumarlo
-                        try:
-                            pdf_size_bytes = os.path.getsize(temp_pdf_path)
-                            total_downloaded_size_bytes += pdf_size_bytes
-                        except OSError as e:
-                            print(f"Advertencia: No se pudo obtener el tamaño del archivo temporal {temp_pdf_path}: {e}")
+                    try:
+                        response = session.get(full_sci_hub_url, timeout=30)
+                        response.raise_for_status()
+                        content_type = response.headers.get('Content-Type', '').lower()
+                        if 'application/pdf' in content_type:
+                            pdf_content = response.content
+                            print(f"ÉXITO (directo): PDF obtenido para '{effective_title}'.")
+                            if not download_attempt_reason: # Only set if primary was not attempted or failed silently before this
+                                download_attempt_reason = "Éxito vía acceso directo"
+                        else:
+                            print(f"FALLO (directo): Contenido no es PDF desde {full_sci_hub_url}. Content-Type: {content_type}. Sci-Hub podría haber mostrado una página HTML.")
+                            if not download_attempt_reason or "Éxito" not in download_attempt_reason :
+                                download_attempt_reason = f"Contenido no PDF desde acceso directo ({content_type})"
+                    except requests.exceptions.RequestException as e:
+                        print(f"FALLO (directo): No se pudo descargar desde {full_sci_hub_url}. Error: {e}")
+                        if not download_attempt_reason or "Éxito" not in download_attempt_reason:
+                            download_attempt_reason = f"Error descargando de acceso directo: {e}"
+                    except Exception as e:
+                        print(f"FALLO INESPERADO (directo): Error descargando desde {full_sci_hub_url}. Error: {e}")
+                        if not download_attempt_reason or "Éxito" not in download_attempt_reason:
+                            download_attempt_reason = f"Error inesperado (directo): {e}"
+                
+                # Process pdf_content if obtained
+                if pdf_content:
+                    temp_dir = "temp_scihub_pdfs"
+                    if not os.path.exists(temp_dir):
+                        os.makedirs(temp_dir)
+                    temp_pdf_path = os.path.join(temp_dir, f"temp_{os.getpid()}_{index}_{pdf_filename_in_zip}")
+                    
+                    with open(temp_pdf_path, 'wb') as f:
+                        f.write(pdf_content)
+                    
+                    try:
+                        pdf_size_bytes = os.path.getsize(temp_pdf_path)
+                        total_downloaded_size_bytes += pdf_size_bytes
+                    except OSError as e:
+                        print(f"Advertencia: No se pudo obtener el tamaño del archivo temporal {temp_pdf_path}: {e}")
 
-
-                        # Agregar al ZIP
-                        zf.write(temp_pdf_path, arcname=pdf_filename_in_zip)
-                        temp_pdf_paths.append(temp_pdf_path) 
-                        
-                        print(f"ÉXITO: '{title if title else doi}' descargado y agregado al ZIP como '{pdf_filename_in_zip}'.")
-                        successful_downloads += 1
-                    else:
-                        print(f"FALLO: El contenido para '{title if title else doi}' (DOI: {doi}) no es un PDF. Content-Type: {content_type}. Sci-Hub podría haber mostrado una página HTML.")
-                        failed_downloads.append({'title': title if title else "Título Desconocido", 'doi': doi, 'reason': 'No es un archivo PDF'})
-
-                except requests.exceptions.RequestException as e:
-                    print(f"FALLO: No se pudo descargar '{title if title else doi}' (DOI: {doi}). Error: {e}")
-                    failed_downloads.append({'title': title if title else "Título Desconocido", 'doi': doi, 'reason': str(e)})
-                except Exception as e:
-                    print(f"FALLO INESPERADO: Ocurrió un error procesando '{title if title else doi}' (DOI: {doi}). Error: {e}")
-                    failed_downloads.append({'title': title if title else "Título Desconocido", 'doi': doi, 'reason': f"Error inesperado: {str(e)}"})
+                    zf.write(temp_pdf_path, arcname=pdf_filename_in_zip)
+                    temp_pdf_paths.append(temp_pdf_path)
+                    
+                    print(f"AGREGADO AL ZIP: '{effective_title}' como '{pdf_filename_in_zip}'.")
+                    successful_downloads += 1
+                else:
+                    # Both attempts failed or no PDF content found
+                    final_reason = download_attempt_reason if download_attempt_reason else "No se pudo obtener contenido PDF"
+                    print(f"FALLO FINAL: No se pudo descargar '{effective_title}' (DOI: {doi}). Razón: {final_reason}")
+                    failed_downloads.append({'title': effective_title, 'doi': doi, 'reason': final_reason})
 
     except FileNotFoundError:
         messagebox.showerror("Error", f"No se pudo crear el archivo ZIP en la ruta especificada (Directorio no encontrado): {zip_path}")

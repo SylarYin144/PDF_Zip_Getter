@@ -396,7 +396,7 @@ def download_pdfs_from_file():
                     'End_Time': end_time.strftime("%Y-%m-%d %H:%M:%S"),
                     'Duration_Seconds': (end_time - start_time).total_seconds(),
                     'Detailed_Status': detailed_status,
-                    'Failure_Reason': failure_reason_for_report
+                    'Failure_Reason': failure_reason_for_report, # COMMA ADDED HERE
                     # SciHub_Link will be added later
                     # Add successful mirror to log
                     'Successful_Mirror': successful_mirror_for_this_doi 

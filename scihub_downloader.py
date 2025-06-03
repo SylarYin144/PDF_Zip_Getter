@@ -254,6 +254,106 @@ def download_from_google_scholar(doi, title, session):
         # print(f"Unexpected error during Google Scholar processing for DOI {doi}: {e}")
         return None, "FALLO - Unexpected error with Google Scholar"
 
+def download_from_pmc(doi, title, session):
+    """
+    Tries to download a PDF from PubMed Central (PMC) using DOI.
+    """
+    # 1. Convert DOI to PMCID
+    pmcid = None
+    try:
+        id_conv_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids={doi}&format=json&tool=scihub_downloader_script&email=user@example.com"
+        response = session.get(id_conv_url, timeout=20)
+        response.raise_for_status()
+        data = response.json()
+        if data.get("status") == "ok" and data.get("records"):
+            for record in data["records"]:
+                if record.get("doi") == doi and record.get("pmcid"):
+                    pmcid = record["pmcid"]
+                    break
+        if not pmcid:
+            return None, "FALLO - PMCID no encontrado para DOI"
+    except requests.exceptions.RequestException as e:
+        # print(f"PMC ID conversion API request error for DOI {doi}: {e}")
+        return None, "FALLO - Error en API de conversión PMCID"
+    except Exception as e: # Includes JSONDecodeError
+        # print(f"PMC ID conversion parsing error for DOI {doi}: {e}")
+        return None, "FALLO - Error procesando respuesta de API PMCID"
+
+    # 2. Access PMC Article and Find PDF
+    if not pmcid: # Should have returned already, but as a safeguard
+        return None, "FALLO - PMCID no encontrado (safeguard)"
+
+    try:
+        pmc_article_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        article_response = session.get(pmc_article_url, headers=headers, timeout=30)
+        article_response.raise_for_status()
+        soup = BeautifulSoup(article_response.content, 'html.parser')
+
+        pdf_links = []
+        # Common pattern: links in a 'format-menu' div, or specific class like 'pdf-link'
+        format_menu = soup.find('div', class_='format-menu')
+        if format_menu:
+            for a_tag in format_menu.find_all('a', href=True):
+                if '.pdf' in a_tag['href'].lower():
+                    pdf_links.append(a_tag['href'])
+
+        # General search for links containing '/pdf/' and the pmcid (more robust)
+        for a_tag in soup.find_all('a', href=True):
+            href = a_tag['href']
+            if pmcid in href and '/pdf/' in href and href.lower().endswith('.pdf'):
+                pdf_links.append(href)
+
+        # Fallback: direct construction if a known pattern for PMC PDF links exists (often includes article base name)
+        # Example: /pmc/articles/PMC1234567/pdf/jnm0101-0001.pdf - the last part is variable
+        # This might require more sophisticated pattern matching if the exact file name isn't easily found in other tags.
+        # For now, we rely on explicit links.
+
+        # De-duplicate potential links
+        unique_pdf_links = []
+        for link in pdf_links:
+            abs_link = urljoin(pmc_article_url, link) # Ensure absolute
+            if abs_link not in unique_pdf_links:
+                unique_pdf_links.append(abs_link)
+
+        if not unique_pdf_links:
+            return None, f"FALLO - PDF no encontrado en la página PMC para {pmcid}"
+
+        # 3. Download PDF
+        for pdf_url_to_try in unique_pdf_links:
+            try:
+                head_response = session.head(pdf_url_to_try, headers=headers, timeout=20, allow_redirects=True)
+                head_response.raise_for_status()
+                content_type = head_response.headers.get('Content-Type', '').lower()
+
+                if 'application/pdf' in content_type:
+                    pdf_response = session.get(pdf_url_to_try, headers=headers, timeout=60, stream=True)
+                    pdf_response.raise_for_status()
+                    get_content_type = pdf_response.headers.get('Content-Type', '').lower()
+                    if 'application/pdf' in get_content_type:
+                        pdf_content = pdf_response.content
+                        return pdf_content, f"OBTENIDO (PubMed Central {pmcid})"
+                    # else:
+                        # print(f"PMC GET request for {pdf_url_to_try} did not return PDF content-type, but: {get_content_type}")
+                # else:
+                    # print(f"PMC HEAD request for {pdf_url_to_try} did not indicate PDF content-type: {content_type}")
+
+            except requests.exceptions.RequestException as e_dl:
+                # print(f"PMC PDF download error from {pdf_url_to_try}: {e_dl}")
+                continue # Try next link
+            except Exception as e_dl_unex:
+                # print(f"PMC PDF unexpected download error from {pdf_url_to_try}: {e_dl_unex}")
+                continue # Try next link
+
+        return None, f"FALLO - No se pudo descargar PDF desde enlaces PMC para {pmcid}"
+
+    except requests.exceptions.RequestException as e_page:
+        # print(f"PMC article page request error for PMCID {pmcid}: {e_page}")
+        return None, f"FALLO - Error accediendo a página PMC para {pmcid}"
+    except Exception as e_page_parse: # Includes BeautifulSoup errors
+        # print(f"PMC article page parsing error for PMCID {pmcid}: {e_page_parse}")
+        return None, f"FALLO - Error procesando página PMC para {pmcid}"
+
 
 def print_to_console(message, orig_stdout):
     print(message, file=orig_stdout)
@@ -525,6 +625,23 @@ def download_pdfs_from_file():
                             temp_failure_reason_for_log = gs_status_msg
                             temp_detailed_status_for_log = f"Failure_GoogleScholar_{gs_status_msg}"
 
+                    # If Sci-Hub and Google Scholar attempts failed, try PubMed Central
+                    if not pdf_content:
+                        # print(f"Sci-Hub & Google Scholar attempts failed for DOI {doi}. Trying PubMed Central.") # Debug print
+                        pmc_pdf_content, pmc_status_msg = download_from_pmc(doi, effective_title, session)
+                        if pmc_pdf_content:
+                            pdf_content = pmc_pdf_content
+                            download_successful_this_doi = True
+                            successful_mirror_for_this_doi = "PubMed Central"
+                            overall_doi_status = pmc_status_msg
+                            mirror_attempts_details_for_doi.append(("PubMed Central", "OBTENIDO", pmc_status_msg))
+                            temp_detailed_status_for_log = f"Success_PMC_{pmc_status_msg}"
+                            temp_failure_reason_for_log = "" # Clear overall DOI failure as PMC succeeded
+                        else:
+                            mirror_attempts_details_for_doi.append(("PubMed Central", "FALLO", pmc_status_msg))
+                            temp_failure_reason_for_log = pmc_status_msg # Update with PMC failure status
+                            temp_detailed_status_for_log = f"Failure_PMC_{pmc_status_msg}"
+
                     end_time = datetime.now()
                     if download_successful_this_doi and pdf_content:
                         successful_downloads += 1 # Increment *before* calling log for current stats
@@ -698,6 +815,23 @@ def download_pdfs_from_file():
                         mirror_attempts_details_for_retry.append(("Google Scholar (Retry)", "FALLO", gs_status_msg_retry))
                         temp_failure_reason_for_retry_log = gs_status_msg_retry
                         temp_detailed_status_for_retry_log = f"Failure_RETRY_GoogleScholar_{gs_status_msg_retry}"
+
+                # If Sci-Hub retry and Google Scholar retry failed, try PubMed Central for retry
+                if not pdf_content_retry:
+                    # print(f"Sci-Hub & Google Scholar retry attempts failed for DOI {doi_to_retry}. Trying PubMed Central.") # Debug print
+                    pmc_pdf_content_retry, pmc_status_msg_retry = download_from_pmc(doi_to_retry, effective_title_for_retry, session)
+                    if pmc_pdf_content_retry:
+                        pdf_content_retry = pmc_pdf_content_retry
+                        retry_successful_this_doi = True
+                        successful_mirror_for_retry = "PubMed Central"
+                        overall_retry_status = pmc_status_msg_retry
+                        mirror_attempts_details_for_retry.append(("PubMed Central (Retry)", "OBTENIDO", pmc_status_msg_retry))
+                        temp_detailed_status_for_retry_log = f"Success_RETRY_PMC_{pmc_status_msg_retry}"
+                        temp_failure_reason_for_retry_log = "" # Clear overall failure
+                    else:
+                        mirror_attempts_details_for_retry.append(("PubMed Central (Retry)", "FALLO", pmc_status_msg_retry))
+                        temp_failure_reason_for_retry_log = pmc_status_msg_retry
+                        temp_detailed_status_for_retry_log = f"Failure_RETRY_PMC_{pmc_status_msg_retry}"
 
                 retry_end_time_actual_attempt = datetime.now()
                 original_article_log_entry = next((log for log in all_articles_log if str(log.get('DOI', log.get('doi', ''))).strip() == doi_to_retry), None)

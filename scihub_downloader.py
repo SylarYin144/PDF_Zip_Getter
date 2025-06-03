@@ -153,6 +153,86 @@ def extract_pdf_link_from_html(article_page_url, session):
     except requests.exceptions.RequestException as e: print(f"Error al obtener HTML {article_page_url}: {e}"); return None
     except Exception as e: print(f"Error inesperado extrayendo PDF de {article_page_url}: {e}"); return None
 
+def download_from_google_scholar(doi, title, session):
+    """
+    Tries to download a PDF from Google Scholar using DOI.
+    """
+    print(f"Searching Google Scholar for DOI: {doi} (Title: {title if title else 'N/A'})")
+    scholar_url = f"https://scholar.google.com/scholar?q={doi}"
+
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        response = session.get(scholar_url, headers=headers, timeout=30)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        potential_links = []
+        for link_tag in soup.find_all('a', href=True):
+            href = link_tag['href']
+            link_text = link_tag.get_text().lower()
+            if href.lower().endswith('.pdf') or '[pdf]' in link_text or 'pdf' in link_text:
+                if not href.startswith('http'):
+                    href = urljoin(scholar_url, href) # Ensure absolute URL
+
+                # Basic check to avoid some common non-PDF page links that might contain "pdf"
+                if 'pdf' in href.lower() and not any(x in href.lower() for x in ['view', 'download=false', 'scholar.google']):
+                     potential_links.append(href)
+                elif href.lower().endswith('.pdf'): # More direct .pdf links
+                    potential_links.append(href)
+
+        # De-duplicate while preserving order (important for prioritization if any)
+        unique_potential_links = []
+        for plink in potential_links:
+            if plink not in unique_potential_links:
+                unique_potential_links.append(plink)
+
+        print(f"Found {len(unique_potential_links)} potential PDF links on Google Scholar: {unique_potential_links}")
+
+        for pdf_url in unique_potential_links:
+            print(f"Attempting to download PDF from: {pdf_url}")
+            try:
+                # Try HEAD request first (more efficient if server supports it well)
+                head_response = session.head(pdf_url, headers=headers, timeout=20, allow_redirects=True)
+                head_response.raise_for_status()
+                content_type = head_response.headers.get('Content-Type', '').lower()
+
+                if 'application/pdf' in content_type:
+                    print(f"HEAD request successful. Content-Type: {content_type}. Proceeding with GET.")
+                    pdf_response = session.get(pdf_url, headers=headers, timeout=60, stream=True) # stream=True for large files
+                    pdf_response.raise_for_status()
+
+                    # Double check content type from GET response as well
+                    get_content_type = pdf_response.headers.get('Content-Type', '').lower()
+                    if 'application/pdf' in get_content_type:
+                        pdf_content = pdf_response.content
+                        print(f"Successfully downloaded PDF from {pdf_url}")
+                        domain_match = re.search(r'https?://(?:www\.)?([a-zA-Z0-9.-]+)(?:/|$)', pdf_url)
+                        source_domain = domain_match.group(1) if domain_match else "Unknown Domain"
+                        return pdf_content, f"OBTENIDO (Google Scholar via {source_domain})"
+                    else:
+                        print(f"GET request for {pdf_url} did not return PDF content-type, but: {get_content_type}")
+                else:
+                    print(f"HEAD request for {pdf_url} did not indicate PDF content-type: {content_type}")
+
+            except requests.exceptions.HTTPError as e:
+                print(f"HTTP error when trying {pdf_url}: {e.response.status_code}")
+            except requests.exceptions.Timeout:
+                print(f"Timeout when trying {pdf_url}")
+            except requests.exceptions.RequestException as e:
+                print(f"Request error when trying {pdf_url}: {e}")
+            except Exception as e:
+                print(f"Unexpected error when trying {pdf_url}: {e}")
+
+        return None, "FALLO - No suitable PDF link from Google Scholar led to a successful download."
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error searching Google Scholar for DOI {doi}: {e}")
+        return None, f"FALLO - Google Scholar search error: {e}"
+    except Exception as e:
+        print(f"Unexpected error during Google Scholar processing for DOI {doi}: {e}")
+        return None, f"FALLO - Unexpected error with Google Scholar: {e}"
+
+
 def print_to_console(message, orig_stdout):
     print(message, file=orig_stdout)
 
@@ -350,10 +430,32 @@ def download_pdfs_from_file():
                         else:
                             if mirror_idx < len(mirrors_to_try_for_this_doi) - 1: time.sleep(user_mirror_switch_delay) # No print here, handled by logger
                     
+                    # If Sci-Hub download failed, try Google Scholar
+                    if not pdf_content:
+                        print(f"Sci-Hub attempts failed for DOI {doi}. Trying Google Scholar.")
+                        # Ensure session is passed
+                        gs_pdf_content, gs_status_msg = download_from_google_scholar(doi, effective_title, session)
+                        if gs_pdf_content:
+                            pdf_content = gs_pdf_content
+                            download_successful_this_doi = True
+                            successful_mirror_for_this_doi = "Google Scholar" # Or use part of gs_status_msg
+                            overall_doi_status = gs_status_msg # e.g., "OBTENIDO (Google Scholar via SOME_DOMAIN)"
+                            # Add to mirror_attempts_details for logging consistency
+                            mirror_attempts_details_for_doi.append(("Google Scholar", "OBTENIDO", gs_status_msg))
+                            temp_detailed_status_for_log = f"Success_GoogleScholar_{gs_status_msg}" # For all_articles_log
+                        else:
+                            # Add GS attempt to log, it failed
+                            mirror_attempts_details_for_doi.append(("Google Scholar", "FALLO", gs_status_msg))
+                            temp_failure_reason_for_log = gs_status_msg # Update failure reason if GS also failed
+                            temp_detailed_status_for_log = f"Failure_GoogleScholar_{gs_status_msg}"
+
+
                     end_time = datetime.now()
                     if download_successful_this_doi and pdf_content:
                         successful_downloads += 1 # Increment *before* calling log for current stats
-                        overall_doi_status = "OBTENIDO"
+                        # overall_doi_status is already set if successful (either by SciHub or GS)
+                        if not overall_doi_status.startswith("OBTENIDO"): # Ensure it's marked OBTENIDO if somehow missed
+                            overall_doi_status = "OBTENIDO"
                         # ... (save PDF to zip as before) ...
                         data_for_successful_sheet = original_row_data.copy(); data_for_successful_sheet['Successful_Mirror'] = successful_mirror_for_this_doi; successful_articles_data.append(data_for_successful_sheet)
                         temp_dir = "temp_scihub_pdfs"; 
@@ -379,9 +481,12 @@ def download_pdfs_from_file():
                     # Separator after logging for the current article in the main loop
                     print_to_console("===============================================================================================", original_stdout)
                     if current_article_num_for_log < total_articles : time.sleep(user_inter_doi_delay) # Sleep if not the last article
+                    # Ensure overall_doi_status is updated for the log entry if it was a GS success
+                    if download_successful_this_doi and "Google Scholar" in successful_mirror_for_this_doi:
+                         log_entry_detailed_status = f"Success_{successful_mirror_for_this_doi}" # Update for GS success
 
         # ... (except FileNotFoundError, Exception for zip as before) ...
-        except FileNotFoundError: messagebox.showerror("Error", f"No se pudo crear ZIP (Directorio no encontrado): {zip_path}"); print("Error crítico: FileNotFoundError al crear ZIP."); zip_creation_or_main_loop_error = True 
+        except FileNotFoundError: messagebox.showerror("Error", f"No se pudo crear ZIP (Directorio no encontrado): {zip_path}"); print("Error crítico: FileNotFoundError al crear ZIP."); zip_creation_or_main_loop_error = True
         except Exception as e: messagebox.showerror("Error", f"Error inesperado en ZIP o descargas: {e}"); print(f"Error crítico: Excepción en ZIP o descargas: {e}."); zip_creation_or_main_loop_error = True
 
 
@@ -439,12 +544,30 @@ def download_pdfs_from_file():
                     else:
                         if mirror_idx_retry < len(mirrors_for_retry) - 1: time.sleep(user_mirror_switch_delay)
                 
+                # If Sci-Hub retry failed, try Google Scholar for retry
+                if not pdf_content_retry:
+                    print(f"Sci-Hub retry attempts failed for DOI {doi_to_retry}. Trying Google Scholar.")
+                    gs_pdf_content_retry, gs_status_msg_retry = download_from_google_scholar(doi_to_retry, effective_title_for_retry, session)
+                    if gs_pdf_content_retry:
+                        pdf_content_retry = gs_pdf_content_retry
+                        retry_successful_this_doi = True
+                        successful_mirror_for_retry = "Google Scholar" # Or use part of gs_status_msg_retry
+                        overall_retry_status = gs_status_msg_retry # e.g., "OBTENIDO (Google Scholar via SOME_DOMAIN)"
+                        mirror_attempts_details_for_retry.append(("Google Scholar (Retry)", "OBTENIDO", gs_status_msg_retry))
+                        temp_detailed_status_for_retry_log = f"Success_RETRY_GoogleScholar_{gs_status_msg_retry}"
+                    else:
+                        mirror_attempts_details_for_retry.append(("Google Scholar (Retry)", "FALLO", gs_status_msg_retry))
+                        temp_failure_reason_for_retry_log = gs_status_msg_retry # Update failure reason
+                        temp_detailed_status_for_retry_log = f"Failure_RETRY_GoogleScholar_{gs_status_msg_retry}"
+
                 retry_end_time_actual_attempt = datetime.now()
                 original_article_log_entry = next((log for log in all_articles_log if str(log.get('DOI', log.get('doi', ''))).strip() == doi_to_retry), None)
 
                 if retry_successful_this_doi and pdf_content_retry:
                     successful_downloads += 1 # Increment before log
-                    overall_retry_status = "OBTENIDO"
+                    # overall_retry_status is already set if successful
+                    if not overall_retry_status.startswith("OBTENIDO"):
+                         overall_retry_status = "OBTENIDO"
                     # ... (update successful_articles_data, save PDF, add to ZIP as before) ...
                     articles_successfully_retried_ids.append(doi_to_retry)
                     original_data_for_success = {k: v for k, v in failed_article_entry.items() if k not in ['Failure_Reason', 'Detailed_Status', 'original_index']}; original_data_for_success['Successful_Mirror'] = successful_mirror_for_retry; successful_articles_data.append(original_data_for_success)
@@ -459,14 +582,16 @@ def download_pdfs_from_file():
                     except Exception as e: print(f"Error CRÍTICO al agregar PDF (reintento) '{pdf_filename_in_zip_retry}' al ZIP: {e}")
                     temp_pdf_paths.append(temp_pdf_path_retry) 
                     if original_article_log_entry: # Update original log entry
-                        original_article_log_entry['Detailed_Status'] = temp_detailed_status_for_retry_log
-                        original_article_log_entry['Failure_Reason'] = ""
+                        original_article_log_entry['Detailed_Status'] = temp_detailed_status_for_retry_log if not ("Google Scholar" in successful_mirror_for_retry) else f"Success_RETRY_GoogleScholar_{successful_mirror_for_retry}"
+                        original_article_log_entry['Failure_Reason'] = "" if retry_successful_this_doi else temp_failure_reason_for_retry_log
                         original_article_log_entry['Successful_Mirror'] = successful_mirror_for_retry
                         original_article_log_entry['End_Time'] = retry_end_time_actual_attempt.strftime("%Y-%m-%d %H:%M:%S")
                         original_start_dt = datetime.strptime(original_article_log_entry['Start_Time'], "%Y-%m-%d %H:%M:%S")
                         original_article_log_entry['Duration_Seconds'] = (retry_end_time_actual_attempt - original_start_dt).total_seconds()
                 else:
-                    overall_retry_status = "FALTANTE"
+                    # overall_retry_status is already FALTANTE by default or set by GS if it failed
+                    if not overall_retry_status.startswith("FALLO"): # ensure it is if we are in this block.
+                        overall_retry_status = "FALTANTE"
                     if original_article_log_entry: # Update original log entry with latest failure
                         original_article_log_entry['Detailed_Status'] = temp_detailed_status_for_retry_log
                         original_article_log_entry['Failure_Reason'] = temp_failure_reason_for_retry_log

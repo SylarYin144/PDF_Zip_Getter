@@ -56,55 +56,71 @@ def format_and_log_article_status(original_row_data, doi, title, current_article
         
         log_lines = []
         retry_prefix = "[REINTENTO] " if is_retry else ""
-        log_lines.append(f"{retry_prefix}Artículo: {current_article_num}/{total_articles} ({buscados_percentage:.2f}%)")
-        log_lines.append(f"Título: {title if title else 'N/A'}")
+        prefix_applied_in_this_function = False
 
-        # Retrieve First Author information
-        author_val = original_row_data.get('First Author', 'N/A')
-        if author_val == 'N/A': # Fallback to "Autores" (case-insensitive)
-            autores_keys = [k for k in original_row_data.keys() if str(k).lower() == 'autores']
-            author_val = original_row_data.get(autores_keys[0], 'N/A') if autores_keys else 'N/A'
-        if author_val == 'N/A': # Fallback to "Authors" (case-insensitive)
-            authors_keys_en = [k for k in original_row_data.keys() if str(k).lower() == 'authors']
-            author_val = original_row_data.get(authors_keys_en[0], 'N/A') if authors_keys_en else 'N/A'
-        log_lines.append(f"First Author: {author_val}")
+        # log_lines.append(f"{retry_prefix}Artículo: {current_article_num}/{total_articles} ({buscados_percentage:.2f}%)")
+        # log_lines.append(f"Título: {title if title else 'N/A'}")
 
-        # Prioritize "Journal/Book" for journal title
-        journal_title_val = original_row_data.get('Journal/Book', 'N/A')
+        # # Retrieve First Author information
+        # author_val = original_row_data.get('First Author', 'N/A')
+        # if author_val == 'N/A': # Fallback to "Autores" (case-insensitive)
+        #     autores_keys = [k for k in original_row_data.keys() if str(k).lower() == 'autores']
+        #     author_val = original_row_data.get(autores_keys[0], 'N/A') if autores_keys else 'N/A'
+        # if author_val == 'N/A': # Fallback to "Authors" (case-insensitive)
+        #     authors_keys_en = [k for k in original_row_data.keys() if str(k).lower() == 'authors']
+        #     author_val = original_row_data.get(authors_keys_en[0], 'N/A') if authors_keys_en else 'N/A'
+        # log_lines.append(f"First Author: {author_val}")
 
-        # If "Journal/Book" is not found (or has no value and resulted in 'N/A'),
-        # then try the old 'revista' logic as a fallback.
-        if journal_title_val == 'N/A':
-            # Case-insensitive search for 'revista'
-            revista_keys = [k for k in original_row_data.keys() if str(k).lower() == 'revista']
-            journal_title_val = original_row_data.get(revista_keys[0], 'N/A') if revista_keys else 'N/A'
-        log_lines.append(f"Journal/Book: {journal_title_val}")
+        # # Prioritize "Journal/Book" for journal title
+        # journal_title_val = original_row_data.get('Journal/Book', 'N/A')
 
-        # Retrieve Publication Year information
-        pub_year_val = original_row_data.get('Publication Year', 'N/A')
-        if pub_year_val == 'N/A': # Fallback to "Fecha de publicación" (case-insensitive)
-            fecha_pub_keys = [k for k in original_row_data.keys() if str(k).lower() == 'fecha de publicación']
-            pub_year_val = original_row_data.get(fecha_pub_keys[0], 'N/A') if fecha_pub_keys else 'N/A'
-        if pub_year_val == 'N/A': # Fallback to "Year" (case-insensitive)
-            year_keys = [k for k in original_row_data.keys() if str(k).lower() == 'year']
-            pub_year_val = original_row_data.get(year_keys[0], 'N/A') if year_keys else 'N/A'
-        if pub_year_val == 'N/A': # Fallback to "Año" (case-insensitive)
-            ano_keys = [k for k in original_row_data.keys() if str(k).lower() == 'año']
-            pub_year_val = original_row_data.get(ano_keys[0], 'N/A') if ano_keys else 'N/A'
-        log_lines.append(f"Publication Year: {pub_year_val}")
+        # # If "Journal/Book" is not found (or has no value and resulted in 'N/A'),
+        # # then try the old 'revista' logic as a fallback.
+        # if journal_title_val == 'N/A':
+        #     # Case-insensitive search for 'revista'
+        #     revista_keys = [k for k in original_row_data.keys() if str(k).lower() == 'revista']
+        #     journal_title_val = original_row_data.get(revista_keys[0], 'N/A') if revista_keys else 'N/A'
+        # log_lines.append(f"Journal/Book: {journal_title_val}")
+
+        # # Retrieve Publication Year information
+        # pub_year_val = original_row_data.get('Publication Year', 'N/A')
+        # if pub_year_val == 'N/A': # Fallback to "Fecha de publicación" (case-insensitive)
+        #     fecha_pub_keys = [k for k in original_row_data.keys() if str(k).lower() == 'fecha de publicación']
+        #     pub_year_val = original_row_data.get(fecha_pub_keys[0], 'N/A') if fecha_pub_keys else 'N/A'
+        # if pub_year_val == 'N/A': # Fallback to "Year" (case-insensitive)
+        #     year_keys = [k for k in original_row_data.keys() if str(k).lower() == 'year']
+        #     pub_year_val = original_row_data.get(year_keys[0], 'N/A') if year_keys else 'N/A'
+        # if pub_year_val == 'N/A': # Fallback to "Año" (case-insensitive)
+        #     ano_keys = [k for k in original_row_data.keys() if str(k).lower() == 'año']
+        #     pub_year_val = original_row_data.get(ano_keys[0], 'N/A') if ano_keys else 'N/A'
+        # log_lines.append(f"Publication Year: {pub_year_val}")
         
-        log_lines.append(f"DOI: {doi}")
+        # log_lines.append(f"DOI: {doi}")
 
         for i, attempt in enumerate(mirror_attempts_details):
+            line_prefix = ""
+            if is_retry and not prefix_applied_in_this_function:
+                line_prefix = retry_prefix
+                prefix_applied_in_this_function = True
+
             mirror_url, status, reason = attempt
             try:
                 domain_match = re.search(r'https?://(?:www\.)?([a-zA-Z0-9.-]+)(?:/|$)', mirror_url)
                 mirror_short_name = domain_match.group(1) if domain_match else mirror_url[-20:]
             except Exception: mirror_short_name = mirror_url[-20:] 
-            log_lines.append(f"Intento Mirror {i+1} ({mirror_short_name}): {status}. {reason if reason else ''}".strip())
+            log_lines.append(f"{line_prefix}Intento Mirror {i+1} ({mirror_short_name}): {status}. {reason if reason else ''}".strip())
 
-        log_lines.append(f"Resultado Final DOI: {overall_doi_status}")
-        log_lines.append(f"Total Descargados (actualizado): {successful_downloads_count_for_stats}/{total_articles} ({obtenidos_percentage:.2f}%)")
+        final_doi_status_prefix = ""
+        if is_retry and not prefix_applied_in_this_function:
+            final_doi_status_prefix = retry_prefix
+            prefix_applied_in_this_function = True
+        log_lines.append(f"{final_doi_status_prefix}Artículo {overall_doi_status}")
+
+        total_downloaded_prefix = ""
+        if is_retry and not prefix_applied_in_this_function:
+            total_downloaded_prefix = retry_prefix
+            # prefix_applied_in_this_function = True # Not strictly needed to set here as it's the last use
+        log_lines.append(f"{total_downloaded_prefix}Total Descargados (actualizado): {successful_downloads_count_for_stats}/{total_articles} ({obtenidos_percentage:.2f}%)")
         
         formatted_message = "\n".join(log_lines)
         print(f"\n{formatted_message}") 
@@ -463,36 +479,51 @@ def download_pdfs_from_file():
                             except requests.exceptions.RequestException as e: mirror_reason_str = "Error de conexión/RequestException en fallback"; temp_detailed_status_for_log = f"Failure_direct_DOI_access_RequestException_from_{current_mirror_base_url}"
                             except Exception as e: mirror_reason_str = "Error inesperado en fallback"; temp_detailed_status_for_log = f"Failure_direct_DOI_access_Unexpected_from_{current_mirror_base_url}"
                         
-                        mirror_attempts_details_for_doi.append((current_mirror_base_url, mirror_status_str, mirror_reason_str))
-                        temp_failure_reason_for_log = mirror_reason_str # Update with latest reason
+                        # Logic for appending to mirror_attempts_details_for_doi and setting temp_failure_reason_for_log
+                        specific_reason_for_temp_log = mirror_reason_str # Capture specific reason from this mirror
 
-                        if pdf_content: 
-                            download_successful_this_doi = True; successful_mirror_for_this_doi = current_mirror_base_url
-                            overall_doi_status = "OBTENIDO"
-                            temp_failure_reason_for_log = "" # Clear failure reason for log
-                            break 
+                        log_display_reason_for_sci_hub_attempt = mirror_reason_str
+                        if mirror_status_str == "FALLO":
+                            log_display_reason_for_sci_hub_attempt = full_sci_hub_url_for_html_page
+                            temp_failure_reason_for_log = specific_reason_for_temp_log # Update overall DOI failure with specific reason from this mirror
+                        else: # OBTENIDO from this mirror
+                            temp_failure_reason_for_log = "" # Clear overall DOI failure reason
+
+                        mirror_attempts_details_for_doi.append((current_mirror_base_url, mirror_status_str, log_display_reason_for_sci_hub_attempt))
+
+                        if pdf_content: # Successfully got PDF from current_mirror_base_url
+                            download_successful_this_doi = True
+                            successful_mirror_for_this_doi = current_mirror_base_url
+                            # overall_doi_status will be set to "OBTENIDO" or the more specific success message from mirror_status_str
+                            if mirror_status_str.startswith("OBTENIDO"): overall_doi_status = mirror_status_str
+                            else: overall_doi_status = "OBTENIDO"
+                            temp_failure_reason_for_log = "" # Clear overall failure reason for the DOI
+                            # temp_detailed_status_for_log is already set by the successful extraction/fallback
+                            break # Break from Sci-Hub mirror loop
                         else:
-                            if mirror_idx < len(mirrors_to_try_for_this_doi) - 1: time.sleep(user_mirror_switch_delay) # No print here, handled by logger
+                            # PDF not found with this mirror, temp_failure_reason_for_log has the specific reason
+                            if mirror_idx < len(mirrors_to_try_for_this_doi) - 1:
+                                time.sleep(user_mirror_switch_delay)
                     
-                    # If Sci-Hub download failed, try Google Scholar
+                    # After Sci-Hub loop, if still no pdf_content, try Google Scholar
                     if not pdf_content:
-                        print(f"Sci-Hub attempts failed for DOI {doi}. Trying Google Scholar.")
-                        # Ensure session is passed
+                        # print(f"Sci-Hub attempts failed for DOI {doi}. Trying Google Scholar.") # Debug print commented out
                         gs_pdf_content, gs_status_msg = download_from_google_scholar(doi, effective_title, session)
                         if gs_pdf_content:
                             pdf_content = gs_pdf_content
                             download_successful_this_doi = True
-                            successful_mirror_for_this_doi = "Google Scholar" # Or use part of gs_status_msg
-                            overall_doi_status = gs_status_msg # e.g., "OBTENIDO (Google Scholar via SOME_DOMAIN)"
-                            # Add to mirror_attempts_details for logging consistency
+                            successful_mirror_for_this_doi = "Google Scholar"
+                            overall_doi_status = gs_status_msg
                             mirror_attempts_details_for_doi.append(("Google Scholar", "OBTENIDO", gs_status_msg))
-                            temp_detailed_status_for_log = f"Success_GoogleScholar_{gs_status_msg}" # For all_articles_log
+                            temp_detailed_status_for_log = f"Success_GoogleScholar_{gs_status_msg}"
+                            temp_failure_reason_for_log = "" # Clear overall DOI failure as GS succeeded
                         else:
-                            # Add GS attempt to log, it failed
                             mirror_attempts_details_for_doi.append(("Google Scholar", "FALLO", gs_status_msg))
-                            temp_failure_reason_for_log = gs_status_msg # Update failure reason if GS also failed
+                            # temp_failure_reason_for_log is already set if all Sci-Hub mirrors failed.
+                            # If Sci-Hub mirrors didn't run (e.g., empty list), then gs_status_msg becomes the failure reason.
+                            # If Sci-Hub mirrors ran and failed, gs_status_msg will overwrite the last Sci-Hub specific error.
+                            temp_failure_reason_for_log = gs_status_msg
                             temp_detailed_status_for_log = f"Failure_GoogleScholar_{gs_status_msg}"
-
 
                     end_time = datetime.now()
                     if download_successful_this_doi and pdf_content:
@@ -626,28 +657,46 @@ def download_pdfs_from_file():
                         except requests.exceptions.RequestException as e: mirror_reason_str_retry = "RETRY: Error de conexión/RequestException en fallback"; temp_detailed_status_for_retry_log = f"Failure_RETRY_direct_DOI_RequestException_from_{current_mirror_base_url_retry}"
                         except Exception as e: mirror_reason_str_retry = "RETRY: Error inesperado en fallback"; temp_detailed_status_for_retry_log = f"Failure_RETRY_direct_DOI_Unexpected_from_{current_mirror_base_url_retry}"
 
-                    mirror_attempts_details_for_retry.append((current_mirror_base_url_retry, mirror_status_str_retry, mirror_reason_str_retry))
-                    temp_failure_reason_for_retry_log = mirror_reason_str_retry # Update with latest reason from either extraction or fallback
-                    # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
-                    if pdf_content_retry:
-                        retry_successful_this_doi = True; successful_mirror_for_retry = current_mirror_base_url_retry; temp_failure_reason_for_retry_log = ""; overall_retry_status = "OBTENIDO"; break
+                    # Logic for appending to mirror_attempts_details_for_retry and setting temp_failure_reason_for_retry_log
+                    specific_reason_for_temp_retry_log = mirror_reason_str_retry # Capture specific reason
+
+                    log_display_reason_for_sci_hub_retry_attempt = mirror_reason_str_retry
+                    if mirror_status_str_retry == "FALLO":
+                        log_display_reason_for_sci_hub_retry_attempt = full_sci_hub_url_for_html_page_retry
+                        temp_failure_reason_for_retry_log = specific_reason_for_temp_retry_log
+                    else: # OBTENIDO from this mirror
+                        temp_failure_reason_for_retry_log = ""
+
+                    mirror_attempts_details_for_retry.append((current_mirror_base_url_retry, mirror_status_str_retry, log_display_reason_for_sci_hub_retry_attempt))
+
+                    if pdf_content_retry: # Successfully got PDF from current_mirror_base_url_retry
+                        retry_successful_this_doi = True
+                        successful_mirror_for_retry = current_mirror_base_url_retry
+                        if mirror_status_str_retry.startswith("OBTENIDO"): overall_retry_status = mirror_status_str_retry
+                        else: overall_retry_status = "OBTENIDO"
+                        temp_failure_reason_for_retry_log = ""
+                        # temp_detailed_status_for_retry_log is already set
+                        break # Break from Sci-Hub retry mirror loop
                     else:
-                        if mirror_idx_retry < len(mirrors_for_retry) - 1: time.sleep(user_mirror_switch_delay)
-                
-                # If Sci-Hub retry failed, try Google Scholar for retry
+                        # PDF not found with this mirror, temp_failure_reason_for_retry_log has the specific reason
+                        if mirror_idx_retry < len(mirrors_for_retry) - 1:
+                            time.sleep(user_mirror_switch_delay)
+
+                # After Sci-Hub retry loop, if still no pdf_content_retry, try Google Scholar
                 if not pdf_content_retry:
-                    print(f"Sci-Hub retry attempts failed for DOI {doi_to_retry}. Trying Google Scholar.")
+                    # print(f"Sci-Hub retry attempts failed for DOI {doi_to_retry}. Trying Google Scholar.") # Debug print commented out
                     gs_pdf_content_retry, gs_status_msg_retry = download_from_google_scholar(doi_to_retry, effective_title_for_retry, session)
                     if gs_pdf_content_retry:
                         pdf_content_retry = gs_pdf_content_retry
                         retry_successful_this_doi = True
-                        successful_mirror_for_retry = "Google Scholar" # Or use part of gs_status_msg_retry
-                        overall_retry_status = gs_status_msg_retry # e.g., "OBTENIDO (Google Scholar via SOME_DOMAIN)"
+                        successful_mirror_for_retry = "Google Scholar"
+                        overall_retry_status = gs_status_msg_retry
                         mirror_attempts_details_for_retry.append(("Google Scholar (Retry)", "OBTENIDO", gs_status_msg_retry))
                         temp_detailed_status_for_retry_log = f"Success_RETRY_GoogleScholar_{gs_status_msg_retry}"
+                        temp_failure_reason_for_retry_log = ""
                     else:
                         mirror_attempts_details_for_retry.append(("Google Scholar (Retry)", "FALLO", gs_status_msg_retry))
-                        temp_failure_reason_for_retry_log = gs_status_msg_retry # Update failure reason
+                        temp_failure_reason_for_retry_log = gs_status_msg_retry
                         temp_detailed_status_for_retry_log = f"Failure_RETRY_GoogleScholar_{gs_status_msg_retry}"
 
                 retry_end_time_actual_attempt = datetime.now()

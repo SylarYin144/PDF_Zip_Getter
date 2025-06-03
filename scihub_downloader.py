@@ -134,30 +134,32 @@ def clean_filename(title):
     return re.sub(r'[\\/*?:"<>|]', '_', title)
 
 def extract_pdf_link_from_html(article_page_url, session):
-    print(f"Extrayendo HTML de: {article_page_url}") 
+    # print(f"Extrayendo HTML de: {article_page_url}")
     try:
         response = session.get(article_page_url, timeout=30); response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
         iframe = soup.find('iframe', id='pdf')
         if iframe and iframe.get('src'):
-            pdf_src = iframe['src']; print(f"Encontrado PDF en iframe: {pdf_src}") 
+            pdf_src = iframe['src'] #; print(f"Encontrado PDF en iframe: {pdf_src}")
             if pdf_src.startswith('//'): return 'https:' + pdf_src
             elif pdf_src.startswith('/'): return urljoin(article_page_url, pdf_src)
             return pdf_src
         embed = soup.find('embed', attrs={'type': 'application/pdf'})
         if embed and embed.get('src'):
-            pdf_src = embed['src']; print(f"Encontrado PDF en embed: {pdf_src}") 
+            pdf_src = embed['src'] #; print(f"Encontrado PDF en embed: {pdf_src}")
             return urljoin(article_page_url, pdf_src)
-        print(f"No se encontró enlace PDF en iframe/embed para {article_page_url}")
+        # print(f"No se encontró enlace PDF en iframe/embed para {article_page_url}")
         return None
-    except requests.exceptions.RequestException as e: print(f"Error al obtener HTML {article_page_url}: {e}"); return None
-    except Exception as e: print(f"Error inesperado extrayendo PDF de {article_page_url}: {e}"); return None
+    except requests.exceptions.RequestException as e: # print(f"Error al obtener HTML {article_page_url}: {e}");
+        return None
+    except Exception as e: # print(f"Error inesperado extrayendo PDF de {article_page_url}: {e}");
+        return None
 
 def download_from_google_scholar(doi, title, session):
     """
     Tries to download a PDF from Google Scholar using DOI.
     """
-    print(f"Searching Google Scholar for DOI: {doi} (Title: {title if title else 'N/A'})")
+    # print(f"Searching Google Scholar for DOI: {doi} (Title: {title if title else 'N/A'})")
     scholar_url = f"https://scholar.google.com/scholar?q={doi}"
 
     try:
@@ -186,10 +188,10 @@ def download_from_google_scholar(doi, title, session):
             if plink not in unique_potential_links:
                 unique_potential_links.append(plink)
 
-        print(f"Found {len(unique_potential_links)} potential PDF links on Google Scholar: {unique_potential_links}")
+        # print(f"Found {len(unique_potential_links)} potential PDF links on Google Scholar: {unique_potential_links}")
 
         for pdf_url in unique_potential_links:
-            print(f"Attempting to download PDF from: {pdf_url}")
+            # print(f"Attempting to download PDF from: {pdf_url}")
             try:
                 # Try HEAD request first (more efficient if server supports it well)
                 head_response = session.head(pdf_url, headers=headers, timeout=20, allow_redirects=True)
@@ -197,7 +199,7 @@ def download_from_google_scholar(doi, title, session):
                 content_type = head_response.headers.get('Content-Type', '').lower()
 
                 if 'application/pdf' in content_type:
-                    print(f"HEAD request successful. Content-Type: {content_type}. Proceeding with GET.")
+                    # print(f"HEAD request successful. Content-Type: {content_type}. Proceeding with GET.")
                     pdf_response = session.get(pdf_url, headers=headers, timeout=60, stream=True) # stream=True for large files
                     pdf_response.raise_for_status()
 
@@ -205,32 +207,36 @@ def download_from_google_scholar(doi, title, session):
                     get_content_type = pdf_response.headers.get('Content-Type', '').lower()
                     if 'application/pdf' in get_content_type:
                         pdf_content = pdf_response.content
-                        print(f"Successfully downloaded PDF from {pdf_url}")
+                        # print(f"Successfully downloaded PDF from {pdf_url}")
                         domain_match = re.search(r'https?://(?:www\.)?([a-zA-Z0-9.-]+)(?:/|$)', pdf_url)
                         source_domain = domain_match.group(1) if domain_match else "Unknown Domain"
                         return pdf_content, f"OBTENIDO (Google Scholar via {source_domain})"
-                    else:
-                        print(f"GET request for {pdf_url} did not return PDF content-type, but: {get_content_type}")
-                else:
-                    print(f"HEAD request for {pdf_url} did not indicate PDF content-type: {content_type}")
+                    # else:
+                        # print(f"GET request for {pdf_url} did not return PDF content-type, but: {get_content_type}")
+                # else:
+                    # print(f"HEAD request for {pdf_url} did not indicate PDF content-type: {content_type}")
 
             except requests.exceptions.HTTPError as e:
-                print(f"HTTP error when trying {pdf_url}: {e.response.status_code}")
+                # print(f"HTTP error when trying {pdf_url}: {e.response.status_code}")
+                pass # Continue to next link
             except requests.exceptions.Timeout:
-                print(f"Timeout when trying {pdf_url}")
+                # print(f"Timeout when trying {pdf_url}")
+                pass # Continue to next link
             except requests.exceptions.RequestException as e:
-                print(f"Request error when trying {pdf_url}: {e}")
+                # print(f"Request error when trying {pdf_url}: {e}")
+                pass # Continue to next link
             except Exception as e:
-                print(f"Unexpected error when trying {pdf_url}: {e}")
+                # print(f"Unexpected error when trying {pdf_url}: {e}")
+                pass # Continue to next link
 
         return None, "FALLO - No suitable PDF link from Google Scholar led to a successful download."
 
     except requests.exceptions.RequestException as e:
-        print(f"Error searching Google Scholar for DOI {doi}: {e}")
-        return None, f"FALLO - Google Scholar search error: {e}"
+        # print(f"Error searching Google Scholar for DOI {doi}: {e}")
+        return None, "FALLO - Google Scholar search error"
     except Exception as e:
-        print(f"Unexpected error during Google Scholar processing for DOI {doi}: {e}")
-        return None, f"FALLO - Unexpected error with Google Scholar: {e}"
+        # print(f"Unexpected error during Google Scholar processing for DOI {doi}: {e}")
+        return None, "FALLO - Unexpected error with Google Scholar"
 
 
 def print_to_console(message, orig_stdout):
@@ -366,6 +372,8 @@ def download_pdfs_from_file():
 
                     if not doi:
                         # ... (skip logic as before, but use local vars for log call)
+                        # NOTE: The initial print block should be SKIPPED if DOI is empty.
+                        # The existing 'continue' handles this.
                         failure_reason_for_report = "DOI vacío"; detailed_status_for_log = "Skipped_DOI_Missing"
                         overall_doi_status = "FALTANTE (DOI Vacío)"
                         # Call format_and_log_article_status here for skipped DOI
@@ -381,7 +389,43 @@ def download_pdfs_from_file():
                         continue
                     
                     pdf_filename_in_zip = clean_filename(effective_title)[:150] + ".pdf"
-                    # Print handled by format_and_log_article_status
+
+                    # --- Initial Article Summary Print Block (Main Loop) ---
+                    current_article_num = index + 1 # Already have current_article_num_for_log, can reuse
+                    buscados_percentage = (current_article_num / total_articles) * 100 if total_articles > 0 else 0
+
+                    author_val_initial = original_row_data.get('First Author', 'N/A')
+                    if author_val_initial == 'N/A':
+                        autores_keys_initial = [k for k in original_row_data.keys() if str(k).lower() == 'autores']
+                        author_val_initial = original_row_data.get(autores_keys_initial[0], 'N/A') if autores_keys_initial else 'N/A'
+                    if author_val_initial == 'N/A':
+                        authors_keys_en_initial = [k for k in original_row_data.keys() if str(k).lower() == 'authors']
+                        author_val_initial = original_row_data.get(authors_keys_en_initial[0], 'N/A') if authors_keys_en_initial else 'N/A'
+
+                    journal_title_val_initial = original_row_data.get('Journal/Book', 'N/A')
+                    if journal_title_val_initial == 'N/A':
+                        revista_keys_initial = [k for k in original_row_data.keys() if str(k).lower() == 'revista']
+                        journal_title_val_initial = original_row_data.get(revista_keys_initial[0], 'N/A') if revista_keys_initial else 'N/A'
+
+                    pub_year_val_initial = original_row_data.get('Publication Year', 'N/A')
+                    if pub_year_val_initial == 'N/A':
+                        fecha_pub_keys_initial = [k for k in original_row_data.keys() if str(k).lower() == 'fecha de publicación']
+                        pub_year_val_initial = original_row_data.get(fecha_pub_keys_initial[0], 'N/A') if fecha_pub_keys_initial else 'N/A'
+                    if pub_year_val_initial == 'N/A':
+                        year_keys_initial = [k for k in original_row_data.keys() if str(k).lower() == 'year']
+                        pub_year_val_initial = original_row_data.get(year_keys_initial[0], 'N/A') if year_keys_initial else 'N/A'
+                    if pub_year_val_initial == 'N/A':
+                        ano_keys_initial = [k for k in original_row_data.keys() if str(k).lower() == 'año']
+                        pub_year_val_initial = original_row_data.get(ano_keys_initial[0], 'N/A') if ano_keys_initial else 'N/A'
+
+                    print(f"Artículo: {current_article_num}/{total_articles} ({buscados_percentage:.2f}%)")
+                    print(f"Título: {effective_title if effective_title else 'N/A'}")
+                    print(f"First Author: {author_val_initial}")
+                    print(f"Journal/Book: {journal_title_val_initial}")
+                    print(f"Publication Year: {pub_year_val_initial}")
+                    print(f"DOI: {doi}")
+                    print("-" * 30)
+                    # --- End Initial Article Summary Print Block ---
                     
                     mirrors_to_try_for_this_doi = list(user_defined_mirrors)
                     pdf_content = None; download_successful_this_doi = False; successful_mirror_for_this_doi = ""
@@ -402,8 +446,8 @@ def download_pdfs_from_file():
                                 else: 
                                     mirror_reason_str = f"Content-Type no PDF ({content_type})"; temp_detailed_status_for_log = f"Failure_iframe_or_embed_extraction_not_pdf_from_{current_mirror_base_url}"
                             except requests.exceptions.HTTPError as e: mirror_reason_str = f"HTTPError {e.response.status_code}"; temp_detailed_status_for_log = f"Failure_iframe_or_embed_extraction_HTTP{e.response.status_code}_from_{current_mirror_base_url}"
-                            except requests.exceptions.RequestException as e: mirror_reason_str = f"RequestException: {str(e)[:50]}"; temp_detailed_status_for_log = f"Failure_iframe_or_embed_extraction_RequestException_from_{current_mirror_base_url}"
-                            except Exception as e: mirror_reason_str = f"Error Inesperado: {str(e)[:50]}"; temp_detailed_status_for_log = f"Failure_iframe_or_embed_extraction_Unexpected_from_{current_mirror_base_url}"
+                            except requests.exceptions.RequestException as e: mirror_reason_str = "Error de conexión/RequestException en extracción"; temp_detailed_status_for_log = f"Failure_iframe_or_embed_extraction_RequestException_from_{current_mirror_base_url}"
+                            except Exception as e: mirror_reason_str = "Error inesperado en extracción"; temp_detailed_status_for_log = f"Failure_iframe_or_embed_extraction_Unexpected_from_{current_mirror_base_url}"
                         else: mirror_reason_str = "No se encontró enlace PDF en HTML"; temp_detailed_status_for_log = f"Failure_No_PDF_Link_Found_In_HTML_from_{current_mirror_base_url}"
                         
                         if not pdf_content: # Fallback if extraction failed
@@ -416,8 +460,8 @@ def download_pdfs_from_file():
                                 else: 
                                     mirror_reason_str = f"Content-Type no PDF ({content_type}) en acceso directo"; temp_detailed_status_for_log = f"Failure_direct_DOI_access_not_pdf_from_{current_mirror_base_url}"
                             except requests.exceptions.HTTPError as e: mirror_reason_str = f"HTTPError {e.response.status_code} en acceso directo"; temp_detailed_status_for_log = f"Failure_direct_DOI_access_HTTP{e.response.status_code}_from_{current_mirror_base_url}"
-                            except requests.exceptions.RequestException as e: mirror_reason_str = f"RequestException en acceso directo: {str(e)[:50]}"; temp_detailed_status_for_log = f"Failure_direct_DOI_access_RequestException_from_{current_mirror_base_url}"
-                            except Exception as e: mirror_reason_str = f"Error Inesperado en acceso directo: {str(e)[:50]}"; temp_detailed_status_for_log = f"Failure_direct_DOI_access_Unexpected_from_{current_mirror_base_url}"
+                            except requests.exceptions.RequestException as e: mirror_reason_str = "Error de conexión/RequestException en fallback"; temp_detailed_status_for_log = f"Failure_direct_DOI_access_RequestException_from_{current_mirror_base_url}"
+                            except Exception as e: mirror_reason_str = "Error inesperado en fallback"; temp_detailed_status_for_log = f"Failure_direct_DOI_access_Unexpected_from_{current_mirror_base_url}"
                         
                         mirror_attempts_details_for_doi.append((current_mirror_base_url, mirror_status_str, mirror_reason_str))
                         temp_failure_reason_for_log = mirror_reason_str # Update with latest reason
@@ -506,6 +550,44 @@ def download_pdfs_from_file():
                 doi_to_retry = str(failed_article_entry.get('DOI', failed_article_entry.get('doi', ''))).strip()
                 effective_title_for_retry = str(failed_article_entry.get('Title', failed_article_entry.get('title', doi_to_retry))).strip() or doi_to_retry
                 pdf_filename_in_zip_retry = clean_filename(effective_title_for_retry)[:150] + ".pdf"
+
+                # --- Initial Article Summary Print Block (Retry Loop) ---
+                # current_article_num_for_log_retry and total_articles are already available
+                buscados_percentage_retry = (current_article_num_for_log_retry / total_articles) * 100 if total_articles > 0 else 0
+
+                # Extract author, journal, year from failed_article_entry (which is original_row_data for this item)
+                author_val_retry = failed_article_entry.get('First Author', 'N/A')
+                if author_val_retry == 'N/A':
+                    autores_keys_retry = [k for k in failed_article_entry.keys() if str(k).lower() == 'autores']
+                    author_val_retry = failed_article_entry.get(autores_keys_retry[0], 'N/A') if autores_keys_retry else 'N/A'
+                if author_val_retry == 'N/A':
+                    authors_keys_en_retry = [k for k in failed_article_entry.keys() if str(k).lower() == 'authors']
+                    author_val_retry = failed_article_entry.get(authors_keys_en_retry[0], 'N/A') if authors_keys_en_retry else 'N/A'
+
+                journal_title_val_retry = failed_article_entry.get('Journal/Book', 'N/A')
+                if journal_title_val_retry == 'N/A':
+                    revista_keys_retry = [k for k in failed_article_entry.keys() if str(k).lower() == 'revista']
+                    journal_title_val_retry = failed_article_entry.get(revista_keys_retry[0], 'N/A') if revista_keys_retry else 'N/A'
+
+                pub_year_val_retry = failed_article_entry.get('Publication Year', 'N/A')
+                if pub_year_val_retry == 'N/A':
+                    fecha_pub_keys_retry = [k for k in failed_article_entry.keys() if str(k).lower() == 'fecha de publicación']
+                    pub_year_val_retry = failed_article_entry.get(fecha_pub_keys_retry[0], 'N/A') if fecha_pub_keys_retry else 'N/A'
+                if pub_year_val_retry == 'N/A':
+                    year_keys_retry = [k for k in failed_article_entry.keys() if str(k).lower() == 'year']
+                    pub_year_val_retry = failed_article_entry.get(year_keys_retry[0], 'N/A') if year_keys_retry else 'N/A'
+                if pub_year_val_retry == 'N/A':
+                    ano_keys_retry = [k for k in failed_article_entry.keys() if str(k).lower() == 'año']
+                    pub_year_val_retry = failed_article_entry.get(ano_keys_retry[0], 'N/A') if ano_keys_retry else 'N/A'
+
+                print(f"[REINTENTO] Artículo: {current_article_num_for_log_retry}/{total_articles} ({buscados_percentage_retry:.2f}%)")
+                print(f"[REINTENTO] Título: {effective_title_for_retry if effective_title_for_retry else 'N/A'}")
+                print(f"[REINTENTO] First Author: {author_val_retry}")
+                print(f"[REINTENTO] Journal/Book: {journal_title_val_retry}")
+                print(f"[REINTENTO] Publication Year: {pub_year_val_retry}")
+                print(f"[REINTENTO] DOI: {doi_to_retry}")
+                print("-" * 30)
+                # --- End Initial Article Summary Print Block (Retry Loop) ---
                 
                 mirror_attempts_details_for_retry = []
                 overall_retry_status = "FALTANTE"
@@ -526,18 +608,26 @@ def download_pdfs_from_file():
                             content_type = response.headers.get('Content-Type', '').lower()
                             if 'application/pdf' in content_type: pdf_content_retry = response.content; mirror_status_str_retry = "OBTENIDO (REINTENTO Extracción)"; temp_detailed_status_for_retry_log = f"Success_RETRY_iframe_embed_from_{current_mirror_base_url_retry}"
                             else: mirror_reason_str_retry = f"RETRY: Content-Type not PDF ({content_type})"; temp_detailed_status_for_retry_log = f"Failure_RETRY_iframe_embed_not_pdf_from_{current_mirror_base_url_retry}"
-                        except Exception as e: mirror_reason_str_retry = f"RETRY: Error extracción: {str(e)[:50]}"; temp_detailed_status_for_retry_log = f"Failure_RETRY_iframe_embed_Exception_from_{current_mirror_base_url_retry}"
+                        except requests.exceptions.HTTPError as e: mirror_reason_str_retry = f"RETRY: HTTPError {e.response.status_code}"; temp_detailed_status_for_retry_log = f"Failure_RETRY_iframe_embed_HTTPError_from_{current_mirror_base_url_retry}"
+                        except requests.exceptions.RequestException as e: mirror_reason_str_retry = "RETRY: Error de conexión/RequestException en extracción"; temp_detailed_status_for_retry_log = f"Failure_RETRY_iframe_embed_RequestException_from_{current_mirror_base_url_retry}"
+                        except Exception as e: mirror_reason_str_retry = "RETRY: Error inesperado en extracción"; temp_detailed_status_for_retry_log = f"Failure_RETRY_iframe_embed_Unexpected_from_{current_mirror_base_url_retry}"
                     else: mirror_reason_str_retry = "RETRY: No se encontró enlace PDF en HTML"; temp_detailed_status_for_retry_log = f"Failure_RETRY_No_PDF_Link_Found_In_HTML_from_{current_mirror_base_url_retry}"
+
                     if not pdf_content_retry: # Fallback
-                        temp_failure_reason_for_retry_log = mirror_reason_str_retry
-                        try: # ... (fallback)
+                        temp_failure_reason_for_retry_log = mirror_reason_str_retry # Preserve reason from extraction if it failed there
+                        try:
                             response = session.get(full_sci_hub_url_for_html_page_retry, timeout=30); response.raise_for_status()
                             content_type = response.headers.get('Content-Type', '').lower()
-                            if 'application/pdf' in content_type: pdf_content_retry = response.content; mirror_status_str_retry = "OBTENIDO (REINTENTO Fallback Directo)"; mirror_reason_str_retry = ""; temp_detailed_status_for_retry_log = f"Success_RETRY_direct_DOI_from_{current_mirror_base_url_retry}"
-                            else: mirror_reason_str_retry = f"RETRY: Content-Type not PDF ({content_type}) en fallback"; temp_detailed_status_for_retry_log = f"Failure_RETRY_direct_DOI_not_pdf_from_{current_mirror_base_url_retry}"
-                        except Exception as e: mirror_reason_str_retry = f"RETRY: Error fallback: {str(e)[:50]}"; temp_detailed_status_for_retry_log = f"Failure_RETRY_direct_DOI_Exception_from_{current_mirror_base_url_retry}"
+                            if 'application/pdf' in content_type:
+                                pdf_content_retry = response.content; mirror_status_str_retry = "OBTENIDO (REINTENTO Fallback Directo)"; mirror_reason_str_retry = ""; temp_detailed_status_for_retry_log = f"Success_RETRY_direct_DOI_from_{current_mirror_base_url_retry}"
+                            else:
+                                mirror_reason_str_retry = f"RETRY: Content-Type not PDF ({content_type}) en fallback"; temp_detailed_status_for_retry_log = f"Failure_RETRY_direct_DOI_not_pdf_from_{current_mirror_base_url_retry}"
+                        except requests.exceptions.HTTPError as e: mirror_reason_str_retry = f"RETRY: HTTPError {e.response.status_code} en fallback"; temp_detailed_status_for_retry_log = f"Failure_RETRY_direct_DOI_HTTPError_from_{current_mirror_base_url_retry}"
+                        except requests.exceptions.RequestException as e: mirror_reason_str_retry = "RETRY: Error de conexión/RequestException en fallback"; temp_detailed_status_for_retry_log = f"Failure_RETRY_direct_DOI_RequestException_from_{current_mirror_base_url_retry}"
+                        except Exception as e: mirror_reason_str_retry = "RETRY: Error inesperado en fallback"; temp_detailed_status_for_retry_log = f"Failure_RETRY_direct_DOI_Unexpected_from_{current_mirror_base_url_retry}"
+
                     mirror_attempts_details_for_retry.append((current_mirror_base_url_retry, mirror_status_str_retry, mirror_reason_str_retry))
-                    temp_failure_reason_for_retry_log = mirror_reason_str_retry
+                    temp_failure_reason_for_retry_log = mirror_reason_str_retry # Update with latest reason from either extraction or fallback
                     # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
                     if pdf_content_retry:
                         retry_successful_this_doi = True; successful_mirror_for_retry = current_mirror_base_url_retry; temp_failure_reason_for_retry_log = ""; overall_retry_status = "OBTENIDO"; break

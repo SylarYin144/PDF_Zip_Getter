@@ -35,12 +35,12 @@ MIRROR_SWITCH_DELAY_SECONDS = 3
 #         self.original_stdout.write(str_)
 #         self.original_stdout.flush()
 #     def flush(self):
-#         self.widget.update_idletasks() 
+#         self.widget.update_idletasks()
 #         self.original_stdout.flush()
 
 # def on_log_window_close(log_window_ref, original_stdout_ref, root_tk_instance): # GUI logging disabled
-#     if sys.stdout != original_stdout_ref: 
-#         print("Log window closed by user. Restoring original stdout.", file=original_stdout_ref) 
+#     if sys.stdout != original_stdout_ref:
+#         print("Log window closed by user. Restoring original stdout.", file=original_stdout_ref)
 #         sys.stdout = original_stdout_ref
 #     if log_window_ref:
 #         try: log_window_ref.destroy()
@@ -58,22 +58,41 @@ def format_and_log_article_status(original_row_data, doi, title, current_article
         retry_prefix = "[REINTENTO] " if is_retry else ""
         log_lines.append(f"{retry_prefix}Artículo: {current_article_num}/{total_articles} ({buscados_percentage:.2f}%)")
         log_lines.append(f"Título: {title if title else 'N/A'}")
-        
+
+        # Retrieve First Author information
+        author_val = original_row_data.get('First Author', 'N/A')
+        if author_val == 'N/A': # Fallback to "Autores" (case-insensitive)
+            autores_keys = [k for k in original_row_data.keys() if str(k).lower() == 'autores']
+            author_val = original_row_data.get(autores_keys[0], 'N/A') if autores_keys else 'N/A'
+        if author_val == 'N/A': # Fallback to "Authors" (case-insensitive)
+            authors_keys_en = [k for k in original_row_data.keys() if str(k).lower() == 'authors']
+            author_val = original_row_data.get(authors_keys_en[0], 'N/A') if authors_keys_en else 'N/A'
+        log_lines.append(f"First Author: {author_val}")
+
         # Prioritize "Journal/Book" for journal title
         journal_title_val = original_row_data.get('Journal/Book', 'N/A')
-        
-        # If "Journal/Book" is not found (or has no value and resulted in 'N/A'), 
+
+        # If "Journal/Book" is not found (or has no value and resulted in 'N/A'),
         # then try the old 'revista' logic as a fallback.
         if journal_title_val == 'N/A':
             # Case-insensitive search for 'revista'
             revista_keys = [k for k in original_row_data.keys() if str(k).lower() == 'revista']
             journal_title_val = original_row_data.get(revista_keys[0], 'N/A') if revista_keys else 'N/A'
+        log_lines.append(f"Journal/Book: {journal_title_val}")
 
-        fecha_pub_keys = [k for k in original_row_data.keys() if str(k).lower() == 'fecha de publicación']
-        fecha_pub_val = original_row_data.get(fecha_pub_keys[0], 'N/A') if fecha_pub_keys else 'N/A'
+        # Retrieve Publication Year information
+        pub_year_val = original_row_data.get('Publication Year', 'N/A')
+        if pub_year_val == 'N/A': # Fallback to "Fecha de publicación" (case-insensitive)
+            fecha_pub_keys = [k for k in original_row_data.keys() if str(k).lower() == 'fecha de publicación']
+            pub_year_val = original_row_data.get(fecha_pub_keys[0], 'N/A') if fecha_pub_keys else 'N/A'
+        if pub_year_val == 'N/A': # Fallback to "Year" (case-insensitive)
+            year_keys = [k for k in original_row_data.keys() if str(k).lower() == 'year']
+            pub_year_val = original_row_data.get(year_keys[0], 'N/A') if year_keys else 'N/A'
+        if pub_year_val == 'N/A': # Fallback to "Año" (case-insensitive)
+            ano_keys = [k for k in original_row_data.keys() if str(k).lower() == 'año']
+            pub_year_val = original_row_data.get(ano_keys[0], 'N/A') if ano_keys else 'N/A'
+        log_lines.append(f"Publication Year: {pub_year_val}")
         
-        log_lines.append(f"Journal/Book: {journal_title_val}") # Changed label from "Revista"
-        log_lines.append(f"Fecha de publicación: {fecha_pub_val}")
         log_lines.append(f"DOI: {doi}")
 
         for i, attempt in enumerate(mirror_attempts_details):
@@ -146,7 +165,7 @@ def download_pdfs_from_file():
 
     # GUI Log window and stdout redirection are disabled.
     # All print statements will go to the original stdout (console).
-    
+
     try:
         # Since GUI dialogs are used, we still need a root Tk window for them,
         # but it can be managed more minimally if no log window is tied to it.
@@ -188,7 +207,7 @@ def download_pdfs_from_file():
                 user_defined_mirrors.append(mirror_url)
             if not user_defined_mirrors: messagebox.showerror("Error de Configuración", "Lista de mirrors vacía o inválida. Terminando."); return
         sci_hub_base_url_for_report = user_defined_mirrors[0]
-        
+
         # print_to_console("DIAG: Before root.update() after all dialogs.", original_stdout); root.update(); print_to_console("DIAG: After root.update() after all dialogs.", original_stdout) # GUI logging disabled
         # print_to_console("DIAG: All dialogs complete. Before log_window creation.", original_stdout); log_window = tk.Toplevel(root); print_to_console("DIAG: After log_window = tk.Toplevel(root)", original_stdout) # GUI logging disabled
         # log_window.title("Log de Proceso de Descarga"); log_window.geometry("800x600") # GUI logging disabled
@@ -213,9 +232,9 @@ def download_pdfs_from_file():
         try: # File reading try block
             file_extension = os.path.splitext(input_file_path)[1].lower()
             if file_extension in ['.xlsx', '.xls']:
-                try: 
+                try:
                     df = pd.read_excel(input_file_path)
-                except Exception as e: 
+                except Exception as e:
                     messagebox.showerror("Error de Excel", f"Error al leer Excel: {e}")
                     raise # Re-raise to be caught by the outer exception handler for file reading
             elif file_extension == '.csv': # Explicitly handle CSV
@@ -236,11 +255,11 @@ def download_pdfs_from_file():
                 raise ValueError("DataFrame no fue cargado correctamente.")
 
         except Exception as e: # Catch any exception from file reading block
-            print(f"Error fatal al leer archivo de entrada: {e}") 
+            print(f"Error fatal al leer archivo de entrada: {e}")
             # if log_window and log_window.winfo_exists(): log_window.destroy() # GUI logging disabled
             messagebox.showerror("Error Crítico de Archivo", f"No se pudo leer el archivo de entrada: {e}\nEl programa terminará.")
             return # Exit if file reading fails
-        
+
         # Crucial check: If df is still None here, it means file reading failed in a way not caught above,
         # or a new path was introduced. This ensures we don't proceed.
         if df is None:
@@ -276,6 +295,8 @@ def download_pdfs_from_file():
                         log_entry = {**original_row_data, 'Start_Time': start_time.strftime("%Y-%m-%d %H:%M:%S"), 'End_Time': end_time.strftime("%Y-%m-%d %H:%M:%S"), 'Duration_Seconds': (end_time - start_time).total_seconds(), 'Detailed_Status': detailed_status_for_log, 'Failure_Reason': failure_reason_for_report, 'Successful_Mirror': ""}
                         all_articles_log.append(log_entry); failed_articles_data.append({**original_row_data, 'Failure_Reason': failure_reason_for_report, 'Detailed_Status': detailed_status_for_log, 'original_index': index})
                         # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
+                        # Separator after logging for a skipped DOI
+                        print_to_console("===============================================================================================", original_stdout)
                         time.sleep(user_inter_doi_delay) # Still sleep for skipped
                         continue
                     
@@ -355,6 +376,8 @@ def download_pdfs_from_file():
                     all_articles_log.append({**original_row_data, 'Start_Time': start_time.strftime("%Y-%m-%d %H:%M:%S"), 'End_Time': end_time.strftime("%Y-%m-%d %H:%M:%S"), 'Duration_Seconds': (end_time - start_time).total_seconds(), 'Detailed_Status': log_entry_detailed_status, 'Failure_Reason': log_entry_failure_reason, 'Successful_Mirror': successful_mirror_for_this_doi })
                     
                     # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
+                    # Separator after logging for the current article in the main loop
+                    print_to_console("===============================================================================================", original_stdout)
                     if current_article_num_for_log < total_articles : time.sleep(user_inter_doi_delay) # Sleep if not the last article
 
         # ... (except FileNotFoundError, Exception for zip as before) ...
@@ -411,9 +434,9 @@ def download_pdfs_from_file():
                     mirror_attempts_details_for_retry.append((current_mirror_base_url_retry, mirror_status_str_retry, mirror_reason_str_retry))
                     temp_failure_reason_for_retry_log = mirror_reason_str_retry
                     # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
-                    if pdf_content_retry: 
-                        retry_successful_this_doi = True; successful_mirror_for_retry = current_mirror_base_url_retry; temp_failure_reason_for_retry_log = ""; overall_retry_status = "OBTENIDO"; break 
-                    else: 
+                    if pdf_content_retry:
+                        retry_successful_this_doi = True; successful_mirror_for_retry = current_mirror_base_url_retry; temp_failure_reason_for_retry_log = ""; overall_retry_status = "OBTENIDO"; break
+                    else:
                         if mirror_idx_retry < len(mirrors_for_retry) - 1: time.sleep(user_mirror_switch_delay)
                 
                 retry_end_time_actual_attempt = datetime.now()
@@ -454,11 +477,13 @@ def download_pdfs_from_file():
                 # Pass original_row_data from failed_article_entry for Revista, Fecha Pub, etc.
                 format_and_log_article_status(failed_article_entry, doi_to_retry, effective_title_for_retry, current_article_num_for_log_retry, total_articles, successful_downloads, mirror_attempts_details_for_retry, overall_retry_status, user_inter_doi_delay, is_retry=True)
 
+                # Separator after logging for the current article in the retry loop
+                print_to_console("===============================================================================================", original_stdout)
                 # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
                 if retry_idx < len(temp_failed_articles_data_for_iteration) - 1: time.sleep(user_inter_doi_delay)
             
             if articles_successfully_retried_ids: failed_articles_data = [item for item in failed_articles_data if str(item.get('DOI', item.get('doi', ''))).strip() not in articles_successfully_retried_ids]
-            
+
             # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
             failed_downloads_summary_list = [{'title': str(item.get('Title',item.get('title','N/A'))).strip(), 'doi': str(item.get('DOI',item.get('doi','N/A'))).strip(), 'reason': str(item.get('Failure_Reason','N/A')).strip()} for item in failed_articles_data]
             total_mb = total_downloaded_size_bytes / (1024 * 1024)
@@ -517,26 +542,26 @@ def download_pdfs_from_file():
                  print("\n--- stdout restaurado a la consola original durante la limpieza final ---", file=original_stdout)
 
         print("\n--- Limpieza Final de Archivos Temporales ---", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
-        
-        for temp_path in temp_pdf_paths: 
-            try: 
+
+        for temp_path in temp_pdf_paths:
+            try:
                 os.remove(temp_path)
                 print(f"Eliminado temp: {temp_path}", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
-            except OSError as e: 
+            except OSError as e:
                 print(f"Error eliminando temp {temp_path}: {e}", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
-        
+
         temp_dir_to_check = "temp_scihub_pdfs"
         if os.path.exists(temp_dir_to_check) and not os.listdir(temp_dir_to_check):
             try: os.rmdir(temp_dir_to_check); print(f"Eliminado dir temp: {temp_dir_to_check}", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
             except OSError as e: print(f"Error eliminando dir temp {temp_dir_to_check}: {e}", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
-        
+
         print("--- Limpieza Finalizada ---", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
-        
+
         # if log_window: # GUI logging disabled
         #     try:
         #         if log_window.winfo_exists(): log_window.destroy()
-        #     except tk.TclError: pass 
-        
+        #     except tk.TclError: pass
+
         # Destroy the main hidden Tkinter window if it exists
         if 'root' in locals() and isinstance(root, tk.Tk):
             try:
@@ -550,12 +575,12 @@ if __name__ == "__main__":
     # This is a fallback if download_pdfs_from_file itself had an issue before original_stdout was set.
     # However, original_stdout inside download_pdfs_from_file should be sys.__stdout__ if not redirected.
     # The check `isinstance(sys.stdout, TextRedirector)` is no longer relevant if TextRedirector is removed.
-    
+
     # The critical part is ensuring sys.stdout is sys.__stdout__ if it got changed.
     # Since TextRedirector is commented out, sys.stdout should not be an instance of it.
     # The `finally` block in `download_pdfs_from_file` now tries to restore original_stdout.
     # A final check here could be made, but might be redundant if `download_pdfs_from_file` handles it.
-    
+
     # Safest is to assume download_pdfs_from_file cleans up its own stdout if it changed it.
     # If TextRedirector and its instantiation are fully removed, sys.stdout should remain as console.
     download_pdfs_from_file()

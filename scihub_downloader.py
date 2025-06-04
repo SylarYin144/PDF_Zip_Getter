@@ -12,6 +12,7 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import json
+import xml.etree.ElementTree as ET
 
 # --- Configuration Constants (Primarily for defaults now) ---
 DEFAULT_SCI_HUB_MIRRORS_EXAMPLE = [ 

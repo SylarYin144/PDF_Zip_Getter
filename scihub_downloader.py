@@ -257,100 +257,118 @@ def download_from_google_scholar(doi, title, session):
         return None, "FALLO - Unexpected error with Google Scholar"
 
 def download_from_pmc(doi, title, session):
-    # print(f"Attempting PubMed Central download for DOI: {doi}") # Keep internal prints commented for now
+    # print(f"Attempting PubMed Central download for DOI: {doi} via Efetch") # Keep internal prints commented for now
     try:
-        # Step 1: Convert DOI to PMCID
+        # Step 1: Convert DOI to PMCID (current logic is fine)
         id_conv_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids={doi}&format=json&tool=my_tool&email=my_email@example.com"
-        # print(f"PMC ID Converter URL: {id_conv_url}")
         try:
-            response = session.get(id_conv_url, timeout=20)
-            response.raise_for_status()
-            data = response.json()
+            response_id_conv = session.get(id_conv_url, timeout=20)
+            response_id_conv.raise_for_status()
+            data_id_conv = response_id_conv.json()
         except requests.exceptions.RequestException as e:
-            # print(f"PMC ID Conv API request failed: {e}")
-            return None, f"FALLO - Error API conversión PMCID ({str(e)[:50]})"
-        except json.JSONDecodeError:
-            # print(f"PMC ID Conv API JSON decode error. Response text: {response.text[:200]}")
+            return None, f"FALLO - Error API conversión PMCID ({str(e)[:30]})"
+        except json.JSONDecodeError: # Make sure import json is present
             return None, "FALLO - Error decodificando respuesta PMCID"
 
         pmcid = None
-        if data.get("records") and len(data["records"]) > 0:
-            if "pmcid" in data["records"][0]:
-                pmcid = data["records"][0]["pmcid"]
-            # else:
-                # print(f"PMCID not found in record: {data['records'][0]}")
-        # else:
-            # print(f"No records found in PMC ID Conv API response: {data}")
+        if data_id_conv.get("records") and len(data_id_conv["records"]) > 0:
+            if data_id_conv["records"][0].get("pmcid"):
+                pmcid = data_id_conv["records"][0]["pmcid"]
 
         if not pmcid:
             return None, f"FALLO - PMCID no encontrado para DOI {doi}"
 
-        # print(f"Found PMCID: {pmcid}")
-
-        # Step 2: Access PMC Article and Find PDF
-        article_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/"
-        # print(f"PMC Article URL: {article_url}")
+        # Step 2: Primary Method - Fetch PMC Article XML via E-utilities efetch
+        efetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pmc&id={pmcid}&rettype=xml&tool=my_tool&email=my_email@example.com"
         try:
-            response = session.get(article_url, timeout=30)
-            response.raise_for_status()
+            response_efetch = session.get(efetch_url, timeout=45)
+            response_efetch.raise_for_status()
+            xml_content_bytes = response_efetch.content
+            root = ET.fromstring(xml_content_bytes)
+            pdf_filename_from_xml = None
+            namespaces = {'xlink': 'http://www.w3.org/1999/xlink'}
+            potential_uri_tags = root.findall('.//self-uri[@content-type="pdf"]', namespaces) + \
+                                 root.findall('.//uri[@content-type="pdf"]', namespaces)
+            for uri_tag in potential_uri_tags:
+                href = uri_tag.get('{http://www.w3.org/1999/xlink}href')
+                if not href: href = uri_tag.get('href')
+                if not href: href = uri_tag.text
+                if href and (href.lower().endswith('.pdf') or '.pdf?' in href.lower()):
+                    pdf_filename_from_xml = href.strip()
+                    break
+            if pdf_filename_from_xml:
+                pdf_download_url = ""
+                if pdf_filename_from_xml.startswith('http://') or pdf_filename_from_xml.startswith('https://'):
+                    pdf_download_url = pdf_filename_from_xml
+                elif not pdf_filename_from_xml.startswith('/'):
+                    pdf_download_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/pdf/{pdf_filename_from_xml}"
+                else:
+                    pdf_download_url = urljoin(f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/", pdf_filename_from_xml)
+                try:
+                    head_response = session.head(pdf_download_url, timeout=20, allow_redirects=True)
+                    head_response.raise_for_status()
+                    content_type = head_response.headers.get('Content-Type', '').lower()
+                    if 'application/pdf' in content_type:
+                        pdf_response = session.get(pdf_download_url, timeout=60, stream=True)
+                        pdf_response.raise_for_status()
+                        get_content_type = pdf_response.headers.get('Content-Type', '').lower()
+                        if 'application/pdf' in get_content_type:
+                            return pdf_response.content, f"OBTENIDO (PMC Efetch {pmcid})"
+                except requests.exceptions.RequestException:
+                    pass
+        except requests.exceptions.RequestException:
+            pass
+        except ET.ParseError:
+            pass
+
+        # Step 3: Fallback Method - HTML Scraping
+        article_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/"
+        try:
+            response_html = session.get(article_url, timeout=30)
+            response_html.raise_for_status()
         except requests.exceptions.RequestException as e:
-            # print(f"PMC Article page request failed: {e}")
-            return None, f"FALLO - Error obteniendo página PMC {pmcid} ({str(e)[:50]})"
+            return None, f"FALLO - Error obteniendo página HTML PMC {pmcid} ({str(e)[:30]})"
 
-        soup = BeautifulSoup(response.content, 'html.parser')
+        soup = BeautifulSoup(response_html.content, 'html.parser')
+        potential_html_pdf_links = []
+        selectors = [
+            'div.format-menu a[href$=".pdf"]', 'ul.format-menu a[href$=".pdf"]',
+            'div.full-text-links a[href$=".pdf"]', 'a.format-pdf[href$=".pdf"]',
+            'a[title*="PDF"][href$=".pdf"]', 'a[data-format="pdf"][href$=".pdf"]'
+        ]
+        for selector in selectors:
+            for link_tag in soup.select(selector):
+                href = link_tag.get('href')
+                if href: potential_html_pdf_links.append(urljoin(article_url, href))
+        if not potential_html_pdf_links:
+            for link_tag in soup.find_all('a', href=True):
+                href = link_tag['href']
+                if href and href.lower().endswith('.pdf') and f"/articles/{pmcid.lower()}/pdf/" in href.lower():
+                    potential_html_pdf_links.append(urljoin(article_url, href))
+                elif href and href.lower().endswith('.pdf') and 'pdf' in link_tag.get_text().lower():
+                     potential_html_pdf_links.append(urljoin(article_url, href))
+        unique_html_pdf_links = []
+        for plink in potential_html_pdf_links:
+            if plink not in unique_html_pdf_links: unique_html_pdf_links.append(plink)
 
-        pdf_links = []
-        # Common pattern for PDF links on PMC
-        for link_tag in soup.find_all('a', href=True):
-            href = link_tag['href']
-            # Check for links that explicitly point to a PDF rendition
-            if '/pdf/' in href and href.lower().endswith('.pdf'):
-                pdf_links.append(urljoin(article_url, href))
-            # Check for links in the "Download" or "Formats" sections, often with specific attributes
-            elif link_tag.get('title') == 'Download PDF' or 'pdf' in link_tag.get_text().lower():
-                 if href.lower().endswith('.pdf') or '/pmc/articles/' in href.lower() and 'rendering=' in href.lower(): # Heuristic for render links
-                    pdf_links.append(urljoin(article_url, href))
+        if not unique_html_pdf_links:
+            return None, f"FALLO - PDF no encontrado en HTML página PMC {pmcid}"
 
-
-        # De-duplicate potential links
-        unique_pdf_links = []
-        for plink in pdf_links:
-            if plink not in unique_pdf_links:
-                unique_pdf_links.append(plink)
-
-        # print(f"Found potential PMC PDF links: {unique_pdf_links}")
-
-        if not unique_pdf_links:
-            return None, f"FALLO - PDF no encontrado en la página PMC para {pmcid}"
-
-        # Step 3: Download PDF
-        for pdf_url_to_try in unique_pdf_links:
-            # print(f"Attempting to download PDF from PMC link: {pdf_url_to_try}")
+        # THIS IS THE MODIFIED LOOP FOR HTML SCRAPING:
+        for pdf_url_html in unique_html_pdf_links:
             try:
-                head_response = session.head(pdf_url_to_try, timeout=20, allow_redirects=True)
-                head_response.raise_for_status()
-                content_type = head_response.headers.get('Content-Type', '').lower()
-
+                pdf_response = session.get(pdf_url_html, timeout=60, stream=True)
+                pdf_response.raise_for_status()
+                content_type = pdf_response.headers.get('Content-Type', '').lower()
                 if 'application/pdf' in content_type:
-                    pdf_response = session.get(pdf_url_to_try, timeout=60, stream=True)
-                    pdf_response.raise_for_status()
-                    get_content_type = pdf_response.headers.get('Content-Type', '').lower() # Check again after GET
-                    if 'application/pdf' in get_content_type:
-                        # print(f"Successfully downloaded PDF from {pdf_url_to_try}")
-                        return pdf_response.content, f"OBTENIDO (PubMed Central {pmcid})"
-                    # else:
-                        # print(f"PMC GET Content-Type not PDF: {get_content_type} from {pdf_url_to_try}")
-                # else:
-                    # print(f"PMC HEAD Content-Type not PDF: {content_type} from {pdf_url_to_try}")
+                    return pdf_response.content, f"OBTENIDO (PMC HTML {pmcid})"
             except requests.exceptions.RequestException as e:
-                # print(f"Failed to download from PMC PDF link {pdf_url_to_try}: {e}")
-                continue # Try next link
+                continue
 
-        return None, f"FALLO - No se pudo descargar PDF desde enlaces PMC para {pmcid}"
+        return None, f"FALLO - No se pudo descargar PDF desde enlaces HTML PMC para {pmcid}"
 
     except Exception as e:
-        # print(f"Unexpected error in download_from_pmc for DOI {doi}: {e}")
-        return None, f"FALLO - Error inesperado en PubMed Central ({str(e)[:50]})"
+        return None, f"FALLO - Error inesperado en PubMed Central ({str(e)[:30]})"
 
 def print_to_console(message, orig_stdout):
     print(message, file=orig_stdout)

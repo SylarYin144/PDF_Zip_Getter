@@ -15,11 +15,7 @@ import json
 import xml.etree.ElementTree as ET
 
 # --- Configuration Constants (Primarily for defaults now) ---
-DEFAULT_SCI_HUB_MIRRORS_EXAMPLE = [ 
-    "https://sci-hub.se/", "https://sci-hub.st/", "https://sci-hub.ru/",
-    "https://sci-hub.red/", "https://NFTsci-hub.box/", "https://sci-hub.wf/", 
-    "https://sci-hub.cat/"
-]
+DEFAULT_SCI_HUB_MIRRORS_EXAMPLE = ["https://sci-hub.se/", "https://sci-hub.st/", "https://sci-hub.box/", "https://sci-hub.ru/", "https://sci-hub.red/"]
 INTER_DOI_DELAY_SECONDS = 5 
 MIRROR_SWITCH_DELAY_SECONDS = 3
 # --- End Configuration Constants ---
@@ -411,19 +407,41 @@ def download_pdfs_from_file():
         print(f"DIAG: After user_mirror_switch_delay dialog, value: {user_mirror_switch_delay}")
         if user_mirror_switch_delay is None: user_mirror_switch_delay = MIRROR_SWITCH_DELAY_SECONDS; messagebox.showinfo("Información", f"Retraso por cambio de Mirror no modificado, se usará el predeterminado: {user_mirror_switch_delay}s")
         print("DIAG: Before user_mirror_list_str dialog")
-        user_mirror_list_str = simpledialog.askstring("Configurar Mirrors de Sci-Hub (Obligatorio)", "Ingrese URLs de mirrors Sci-Hub, separadas por comas.\n(ej: https://sci-hub.se/,https://sci-hub.st/)\nESTOS SERÁN LOS ÚNICOS MIRRORS UTILIZADOS.\nDejar vacío para usar default (https://sci-hub.se/).")
+        # Use DEFAULT_SCI_HUB_MIRRORS_EXAMPLE to pre-fill the dialog
+        initial_mirrors_str = ",".join(DEFAULT_SCI_HUB_MIRRORS_EXAMPLE)
+        user_mirror_list_str = simpledialog.askstring(
+            "Configurar Mirrors de Sci-Hub",
+            "Mirrors de Sci-Hub (separados por coma):\nSe pre-cargan los valores por defecto. Puede editarlos.\nEstos serán los únicos mirrors utilizados.",
+            initialvalue=initial_mirrors_str
+        )
         print(f"DIAG: After user_mirror_list_str dialog, value: {user_mirror_list_str}")
         user_defined_mirrors = []
         if user_mirror_list_str is None: messagebox.showerror("Configuración Requerida", "Configuración de mirrors cancelada. Terminando."); return
-        if not user_mirror_list_str.strip(): messagebox.showinfo("Información de Mirrors", "No se ingresaron mirrors. Usando default: https://sci-hub.se/"); user_defined_mirrors = ["https://sci-hub.se/"]
+        # If the user clears the dialog, user_mirror_list_str will be empty.
+        # In this case, we can fall back to the default list or handle as an error.
+        # For now, let's assume an empty string means the user wants no mirrors, which should be an error or handled.
+        # The existing logic handles empty strip by defaulting to a single mirror, let's refine this.
+        if not user_mirror_list_str.strip():
+            # If user explicitly deleted all mirrors, it's likely an error or they want to cancel.
+            # However, the old logic defaulted to "https://sci-hub.se/".
+            # To maintain consistency while using the new default, let's use DEFAULT_SCI_HUB_MIRRORS_EXAMPLE if empty.
+            messagebox.showinfo("Información de Mirrors", f"No se ingresaron mirrors o se borraron. Usando defaults: {initial_mirrors_str}")
+            user_defined_mirrors = list(DEFAULT_SCI_HUB_MIRRORS_EXAMPLE) # Use a copy
         else:
             raw_mirrors = [mirror.strip() for mirror in user_mirror_list_str.split(',') if mirror.strip()]
             for mirror_url in raw_mirrors:
                 if not mirror_url.startswith(("http://", "https://")): mirror_url = "https://" + mirror_url 
                 if not mirror_url.endswith('/'): mirror_url += '/'
                 user_defined_mirrors.append(mirror_url)
-            if not user_defined_mirrors: messagebox.showerror("Error de Configuración", "Lista de mirrors vacía o inválida. Terminando."); return
-        sci_hub_base_url_for_report = user_defined_mirrors[0]
+            if not user_defined_mirrors: # This case should ideally be covered by the empty string check above.
+                                         # If raw_mirrors is empty due to invalid input (e.g. just commas), then error.
+                messagebox.showerror("Error de Configuración", "Lista de mirrors vacía o inválida después del procesamiento. Terminando.")
+                return
+        # sci_hub_base_url_for_report should be set only if user_defined_mirrors is not empty.
+        # The previous logic would error if user_defined_mirrors was empty here.
+        # The modified logic above tries to ensure user_defined_mirrors has defaults if input is empty.
+        sci_hub_base_url_for_report = user_defined_mirrors[0] if user_defined_mirrors else "N/A"
+
 
         # print_to_console("DIAG: Before root.update() after all dialogs.", original_stdout); root.update(); print_to_console("DIAG: After root.update() after all dialogs.", original_stdout) # GUI logging disabled
         # print_to_console("DIAG: All dialogs complete. Before log_window creation.", original_stdout); log_window = tk.Toplevel(root); print_to_console("DIAG: After log_window = tk.Toplevel(root)", original_stdout) # GUI logging disabled

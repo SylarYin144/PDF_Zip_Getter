@@ -247,14 +247,14 @@ def download_from_google_scholar(doi, title, session):
                 # print(f"Unexpected error when trying {pdf_url}: {e}")
                 pass # Continue to next link
 
-        return None, "FALLO - No suitable PDF link from Google Scholar led to a successful download."
+        return None, f"FALLO - No PDF en Google Scholar ({scholar_url})"
 
     except requests.exceptions.RequestException as e:
         # print(f"Error searching Google Scholar for DOI {doi}: {e}")
-        return None, "FALLO - Google Scholar search error"
+        return None, f"FALLO - Error búsqueda Google Scholar ({scholar_url})"
     except Exception as e:
         # print(f"Unexpected error during Google Scholar processing for DOI {doi}: {e}")
-        return None, "FALLO - Unexpected error with Google Scholar"
+        return None, f"FALLO - Error inesperado Google Scholar ({scholar_url})"
 
 def download_from_pmc(doi, title, session):
     # print(f"Attempting PubMed Central download for DOI: {doi} via Efetch") # Keep internal prints commented for now
@@ -266,9 +266,9 @@ def download_from_pmc(doi, title, session):
             response_id_conv.raise_for_status()
             data_id_conv = response_id_conv.json()
         except requests.exceptions.RequestException as e:
-            return None, f"FALLO - Error API conversión PMCID ({str(e)[:30]})"
+            return None, f"FALLO - Error API conversión PMCID para {doi} ({str(e)[:30]})"
         except json.JSONDecodeError: # Make sure import json is present
-            return None, "FALLO - Error decodificando respuesta PMCID"
+            return None, f"FALLO - Error decodificando respuesta PMCID para {doi}"
 
         pmcid = None
         if data_id_conv.get("records") and len(data_id_conv["records"]) > 0:
@@ -327,7 +327,7 @@ def download_from_pmc(doi, title, session):
             response_html = session.get(article_url, timeout=30)
             response_html.raise_for_status()
         except requests.exceptions.RequestException as e:
-            return None, f"FALLO - Error obteniendo página HTML PMC {pmcid} ({str(e)[:30]})"
+            return None, f"FALLO - Error obteniendo página HTML PMC ({article_url}, {str(e)[:30]})"
 
         soup = BeautifulSoup(response_html.content, 'html.parser')
         potential_html_pdf_links = []
@@ -352,7 +352,7 @@ def download_from_pmc(doi, title, session):
             if plink not in unique_html_pdf_links: unique_html_pdf_links.append(plink)
 
         if not unique_html_pdf_links:
-            return None, f"FALLO - PDF no encontrado en HTML página PMC {pmcid}"
+            return None, f"FALLO - PDF no encontrado en HTML página PMC ({article_url})"
 
         # THIS IS THE MODIFIED LOOP FOR HTML SCRAPING:
         for pdf_url_html in unique_html_pdf_links:
@@ -365,10 +365,10 @@ def download_from_pmc(doi, title, session):
             except requests.exceptions.RequestException as e:
                 continue
 
-        return None, f"FALLO - No se pudo descargar PDF desde enlaces HTML PMC para {pmcid}"
+        return None, f"FALLO - No se pudo descargar PDF desde enlaces HTML PMC ({article_url})"
 
     except Exception as e:
-        return None, f"FALLO - Error inesperado en PubMed Central ({str(e)[:30]})"
+        return None, f"FALLO - Error inesperado en PubMed Central para {doi} ({str(e)[:30]})"
 
 def print_to_console(message, orig_stdout):
     print(message, file=orig_stdout)

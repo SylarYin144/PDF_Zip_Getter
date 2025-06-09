@@ -536,14 +536,16 @@ def download_with_selenium_pmc(driver, doi, title):
                 # For simplicity, take the first one. More complex logic could verify against title/DOI.
                 article_link_element = possible_article_links[0]
                 article_url = article_link_element.get_attribute('href')
-                print(f"SELENIUM PMC: Found article link: {article_url}")
-                driver.set_page_load_timeout(30) # Reset page load timeout for article page navigation
-                driver.get(article_url) # Navigate to the article page
+                print(f"SELENIUM PMC: Found article link: {article_url}. Navigating...")
+                driver.set_page_load_timeout(30)
+                driver.get(article_url)
+                print(f"SELENIUM PMC: Navigation to article page {article_url} presumably successful.")
             else:
-                print(f"SELENIUM PMC: No clear article link found in search results for {doi}. Assuming current page might be the article page or search failed.")
-                # If no specific article link is found, proceed assuming the current page might be it,
-                # or that the PDF link might be directly on a single-result page.
-                article_url = driver.current_url # Use current URL as the article_url for logging
+                print(f"SELENIUM PMC: No clear article link found in search results for {doi}. Assuming current page ({driver.current_url}) might be the article page or search failed.")
+                article_url = driver.current_url # Use current URL
+        except Exception as e_inner_nav:
+            print(f"SELENIUM PMC: Error during article link navigation for DOI {doi}: {e_inner_nav}. Proceeding with current page {driver.current_url}.")
+            article_url = driver.current_url # Fallback to current URL
 
         # Now on the article page (or what we hope is the article page)
         # Wait for the PDF link to be present

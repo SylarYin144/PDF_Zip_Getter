@@ -186,26 +186,71 @@ def download_from_google_scholar(doi, title, session):
         response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
 
-        potential_links = []
+        potential_links = [] # Initialize here
+        # scholar_url is defined earlier in the function as the Google Scholar search URL
+
         for link_tag in soup.find_all('a', href=True):
-            href = link_tag['href']
-            link_text = link_tag.get_text().lower()
-            if href.lower().endswith('.pdf') or '[pdf]' in link_text or 'pdf' in link_text:
-                if not href.startswith('http'):
-                    href = urljoin(scholar_url, href) # Ensure absolute URL
+            href = link_tag.get('href', '') # Get href, default to empty string if not present
+            if not href: # Skip if no href
+                continue
 
-                # Basic check to avoid some common non-PDF page links that might contain "pdf"
-                if 'pdf' in href.lower() and not any(x in href.lower() for x in ['view', 'download=false', 'scholar.google']):
-                     potential_links.append(href)
-                elif href.lower().endswith('.pdf'): # More direct .pdf links
-                    potential_links.append(href)
+            link_text = link_tag.get_text().lower().strip() # Get text, lowercase, strip whitespace
 
-        # De-duplicate while preserving order (important for prioritization if any)
+            # Normalize href for checks by removing trailing slashes and making lowercase
+            # Also handle potential relative URLs that might just be query parameters
+            if href.startswith('?'): # if href is just query params, it's relative to current page
+                normalized_href_lower = urljoin(scholar_url, href).lower().rstrip('/')
+            else: # if it's a full or partial path
+                normalized_href_lower = href.lower().rstrip('/')
+
+
+            is_candidate = False
+            # Priority 1: Link text is exactly '[pdf]' or starts with '[pdf] ' (common for direct links)
+            if link_text == '[pdf]' or link_text.startswith('[pdf] '):
+                is_candidate = True
+            # Priority 2: URL itself ends with .pdf
+            elif normalized_href_lower.endswith('.pdf'):
+                is_candidate = True
+
+            # (Optional: Could add a lower priority check for 'pdf' in link_text if the above are too restrictive,
+            # but it might bring in more non-PDF links. For now, let's stick to stronger signals.)
+            # elif 'pdf' in link_text: # More general, and might be a non-PDF page that mentions PDF
+            #     # Add stricter conditions if using this, e.g., domain check
+            #     if not any(domain in normalized_href_lower for domain in ['scholar.google.com', 'google.com/citations', 'accounts.google.com']):
+            #        is_candidate = True
+
+
+            if is_candidate:
+                # Filter out common non-content Google links unless they are confirmed PDFs
+                # (The check for endswith('.pdf') is important here for scholar.google.com links)
+                if 'scholar.google.com' in normalized_href_lower and not normalized_href_lower.endswith('.pdf'):
+                    # print(f"Skipping likely internal Scholar link: {href}") # Debug
+                    continue
+                if 'google.com/citations' in normalized_href_lower:
+                    # print(f"Skipping citation link: {href}") # Debug
+                    continue
+                if 'accounts.google.com' in normalized_href_lower:
+                    # print(f"Skipping accounts link: {href}") # Debug
+                    continue
+
+                absolute_href = urljoin(scholar_url, href.strip()) # Ensure absolute and strip original href
+
+                # A final check to avoid adding the scholar_url itself or very generic google links if they somehow pass
+                if absolute_href == scholar_url or "google.com/search?q=" in absolute_href:
+                    continue
+
+                if absolute_href not in potential_links: # Avoid duplicates
+                    potential_links.append(absolute_href)
+
+        # The existing de-duplication for unique_potential_links can be removed if `potential_links.append` already checks.
+        # For safety, let's keep the explicit de-duplication step that was there:
         unique_potential_links = []
         for plink in potential_links:
             if plink not in unique_potential_links:
                 unique_potential_links.append(plink)
 
+        # This `unique_potential_links` is then used for download attempts.
+        # The rest of the function (download attempts from unique_potential_links) remains the same.
         # print(f"Found {len(unique_potential_links)} potential PDF links on Google Scholar: {unique_potential_links}")
 
         for pdf_url in unique_potential_links:
@@ -332,9 +377,14 @@ def download_from_pmc(doi, title, session):
         soup = BeautifulSoup(response_html.content, 'html.parser')
         potential_html_pdf_links = []
         selectors = [
-            'div.format-menu a[href$=".pdf"]', 'ul.format-menu a[href$=".pdf"]',
-            'div.full-text-links a[href$=".pdf"]', 'a.format-pdf[href$=".pdf"]',
-            'a[title*="PDF"][href$=".pdf"]', 'a[data-format="pdf"][href$=".pdf"]'
+            'a[data-ga-label="pdf_download_desktop"][href$=".pdf"]', # New
+            'a[data-ga-label="pdf_download"][href$=".pdf"]',         # New
+            'div.format-menu a[href$=".pdf"]',
+            'ul.format-menu a[href$=".pdf"]',
+            'div.full-text-links a[href$=".pdf"]',
+            'a.format-pdf[href$=".pdf"]',
+            'a[title*="PDF"][href$=".pdf"]',
+            'a[data-format="pdf"][href$=".pdf"]'
         ]
         for selector in selectors:
             for link_tag in soup.select(selector):

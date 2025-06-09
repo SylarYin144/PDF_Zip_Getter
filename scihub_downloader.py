@@ -13,11 +13,19 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import json
 import xml.etree.ElementTree as ET
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service as ChromeService
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 # --- Configuration Constants (Primarily for defaults now) ---
 DEFAULT_SCI_HUB_MIRRORS_EXAMPLE = ["https://sci-hub.se/", "https://sci-hub.st/", "https://sci-hub.box/", "https://sci-hub.ru/", "https://sci-hub.red/"]
 INTER_DOI_DELAY_SECONDS = 5 
 MIRROR_SWITCH_DELAY_SECONDS = 3
+STANDARD_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36'
 # --- End Configuration Constants ---
 
 # class TextRedirector(object): # GUI logging disabled
@@ -261,7 +269,7 @@ def download_from_google_scholar(doi, title, session): # Renamed from download_f
     try:
         # Using a more common and recent-looking User-Agent
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
+            'User-Agent': STANDARD_USER_AGENT,
             'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -404,15 +412,243 @@ def download_from_google_scholar(doi, title, session): # Renamed from download_f
         print(f"FIXED: Unexpected error during Google Scholar processing for DOI {doi}: {e}")
         return None, f"FALLO - Error inesperado Google Scholar ({scholar_url})"
 
+def download_with_selenium_google_scholar(driver, doi, title):
+    print(f"SELENIUM GS: Searching Google Scholar for DOI: {doi} (Title: {title if title else 'N/A'})")
+    scholar_url = f"https://scholar.google.com/scholar?hl=en&q={doi}"
+    pdf_content = None
+    status_message = f"FALLO - No PDF en Google Scholar (Selenium) ({scholar_url})"
+
+    try:
+        driver.set_page_load_timeout(30) # Set page load timeout
+        driver.get(scholar_url)
+        # Wait for the page to load and results to be present
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "gs_res_ccl_mid"))
+        )
+
+        # Try to find links with "[PDF]" text first - these are often direct links
+        pdf_links_elements = []
+        try:
+            pdf_links_elements = WebDriverWait(driver, 5).until(
+                EC.presence_of_all_elements_located((By.PARTIAL_LINK_TEXT, "[PDF]"))
+            )
+        except TimeoutException:
+            print(f"SELENIUM GS: No direct '[PDF]' links found for {doi}. Trying other methods.")
+
+        # If no "[PDF]" links, try to find any link containing '.pdf' in href
+        if not pdf_links_elements:
+            try:
+                pdf_links_elements = WebDriverWait(driver, 5).until(
+                    EC.presence_of_all_elements_located((By.XPATH, "//a[contains(@href, '.pdf')]"))
+                )
+            except TimeoutException:
+                print(f"SELENIUM GS: No links with '.pdf' in href found for {doi}.")
+
+        print(f"SELENIUM GS: Found {len(pdf_links_elements)} potential PDF links.")
+
+        for link_element in pdf_links_elements:
+            pdf_url = link_element.get_attribute('href')
+            if pdf_url:
+                print(f"SELENIUM GS: Attempting to download from URL: {pdf_url}")
+                try:
+                    # Use requests to download the PDF
+                    # It's good practice to use a session for requests if making multiple calls,
+                    # but for a single download, a direct get is fine.
+                    # Ensure a User-Agent is set.
+                    # Use STANDARD_USER_AGENT
+                    # Create a new requests session for this download to ensure no cookie conflicts with SciHub session
+                    gs_session = requests.Session()
+                    gs_session.headers.update({'User-Agent': STANDARD_USER_AGENT})
+
+                    pdf_response = gs_session.get(pdf_url, timeout=60, stream=True, allow_redirects=True)
+                    pdf_response.raise_for_status() # Check for HTTP errors
+
+                    content_type = pdf_response.headers.get('Content-Type', '').lower()
+                    if 'application/pdf' in content_type:
+                        # Check if content is substantial (more than a few KB, e.g. 1KB)
+                        # Some error pages might be served as PDF
+                        current_pdf_content = pdf_response.content
+                        if len(current_pdf_content) > 1024: # Check if PDF is larger than 1KB
+                            pdf_content = current_pdf_content
+                            status_message = f"OBTENIDO (Google Scholar Selenium - {pdf_url})"
+                            print(f"SELENIUM GS: Successfully downloaded PDF from {pdf_url}")
+                            gs_session.close()
+                            break # Exit loop once a PDF is successfully downloaded
+                        else:
+                            print(f"SELENIUM GS: PDF from {pdf_url} is too small ({len(current_pdf_content)} bytes). May not be valid. Trying next link.")
+                    else:
+                        print(f"SELENIUM GS: URL {pdf_url} did not return PDF content-type, but: {content_type}")
+                    gs_session.close()
+                except requests.exceptions.HTTPError as e_http:
+                    print(f"SELENIUM GS: HTTP error downloading {pdf_url}: {e_http.response.status_code}")
+                except requests.exceptions.RequestException as e_req:
+                    print(f"SELENIUM GS: Request error downloading {pdf_url}: {e_req}")
+                except Exception as e_gen:
+                    print(f"SELENIUM GS: Unexpected error downloading {pdf_url}: {e_gen}")
+            if pdf_content: # If we got content in the inner loop, break outer
+                break
+
+    except TimeoutException as e:
+        # Check if it's a page load timeout vs element timeout by inspecting current_url vs scholar_url
+        if driver.current_url == scholar_url or driver.current_url == "about:blank": # Heuristic: still on or trying to load the main search page
+            print(f"SELENIUM GS: Page load TimeoutException for {scholar_url}: {e}")
+            status_message = f"FALLO - Timeout carga página Google Scholar (Selenium) ({scholar_url})"
+        else: # Timeout likely occurred waiting for an element
+            print(f"SELENIUM GS: Element TimeoutException en Google Scholar (Selenium) para {doi}: {e}")
+            status_message = f"FALLO - Timeout localizando elemento en Google Scholar (Selenium) ({driver.current_url})"
+    except NoSuchElementException as e:
+        print(f"SELENIUM GS: NoSuchElementException en Google Scholar (Selenium) para {doi}: {e}")
+        status_message = f"FALLO - Elemento no encontrado en Google Scholar (Selenium) ({driver.current_url})"
+    except Exception as e:
+        print(f"SELENIUM GS: An unexpected error occurred with Selenium for DOI {doi} at {driver.current_url if driver else scholar_url}: {e}")
+        status_message = f"FALLO - Error inesperado en Google Scholar (Selenium) ({driver.current_url if driver else scholar_url}, {str(e)[:100]})"
+
+    return pdf_content, status_message
+
+def download_with_selenium_pmc(driver, doi, title):
+    print(f"SELENIUM PMC: Searching PubMed Central for DOI: {doi} (Title: {title if title else 'N/A'})")
+    search_url = f"https://www.ncbi.nlm.nih.gov/pmc/?term={doi}"
+    pdf_content = None
+    status_message = f"FALLO - No PDF en PMC (Selenium) ({search_url})"
+    article_url = None # To store the actual article page URL if found
+
+    try:
+        driver.set_page_load_timeout(30) # Set page load timeout
+        driver.get(search_url)
+
+        # Wait for search results to appear (look for a common container or result item)
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CLASS_NAME, "rprt")) # Common class for search result items
+        )
+
+        # Find the first search result link that seems to be an article link
+        # This might need refinement based on actual PMC search result structure
+        article_link_element = None
+        try:
+            # Look for a link within the first result that contains the DOI or part of the title if available
+            # This is a heuristic and might need adjustment.
+            # Prioritize links that are clearly article links.
+            possible_article_links = driver.find_elements(By.CSS_SELECTOR, "div.rprt .title a")
+            if not possible_article_links: # Fallback if the above selector fails
+                 possible_article_links = driver.find_elements(By.XPATH, "//div[contains(@class, 'rprt')]//a[contains(@href, 'articles/PMC')]")
+
+            if possible_article_links:
+                # For simplicity, take the first one. More complex logic could verify against title/DOI.
+                article_link_element = possible_article_links[0]
+                article_url = article_link_element.get_attribute('href')
+                print(f"SELENIUM PMC: Found article link: {article_url}")
+                driver.set_page_load_timeout(30) # Reset page load timeout for article page navigation
+                driver.get(article_url) # Navigate to the article page
+            else:
+                print(f"SELENIUM PMC: No clear article link found in search results for {doi}. Assuming current page might be the article page or search failed.")
+                # If no specific article link is found, proceed assuming the current page might be it,
+                # or that the PDF link might be directly on a single-result page.
+                article_url = driver.current_url # Use current URL as the article_url for logging
+
+        # Now on the article page (or what we hope is the article page)
+        # Wait for the PDF link to be present
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '.pdf') or contains(translate(., 'PDF', 'pdf'), 'pdf')]"))
+        )
+
+        pdf_link_elements = []
+        # Try common selectors for PDF links on PMC article pages
+        selectors = [
+            (By.XPATH, "//a[contains(@class, 'format-pdf') and contains(@href, '.pdf')]"), # Specific class
+            (By.XPATH, "//a[contains(translate(., 'PDF', 'pdf'), 'pdf') and contains(@href, '.pdf')]"), # Contains "pdf" text and .pdf in href
+            (By.PARTIAL_LINK_TEXT, "Download PDF"),
+            (By.CSS_SELECTOR, "a.pdf-button[href$='.pdf']"),
+            (By.XPATH, "//a[contains(@href, '.pdf') and .//span[contains(translate(., 'PDF', 'pdf'), 'pdf')]]") # Link with .pdf href and a span with "pdf"
+        ]
+
+        for by, selector_val in selectors:
+            try:
+                elements = WebDriverWait(driver, 3).until(
+                    EC.presence_of_all_elements_located((by, selector_val))
+                )
+                if elements:
+                    pdf_link_elements.extend(elements)
+                    print(f"SELENIUM PMC: Found elements with selector {by} {selector_val}")
+            except TimeoutException:
+                print(f"SELENIUM PMC: Timeout for selector {by} {selector_val}")
+
+        # Deduplicate elements if necessary (though order of selectors provides some priority)
+        # For now, just iterate through what we found
+        print(f"SELENIUM PMC: Found {len(pdf_link_elements)} potential PDF links on article page {article_url if article_url else driver.current_url}.")
+
+        for link_element in pdf_link_elements:
+            pdf_url_on_page = link_element.get_attribute('href')
+            if pdf_url_on_page:
+                # Ensure URL is absolute
+                if not pdf_url_on_page.startswith('http'):
+                    base_for_relative = driver.current_url # Base URL of the current page
+                    # A more robust way to get the base for ncbi.nlm.nih.gov
+                    if "ncbi.nlm.nih.gov" in base_for_relative:
+                        base_for_relative = "https://www.ncbi.nlm.nih.gov"
+                    pdf_url_on_page = urljoin(base_for_relative, pdf_url_on_page)
+
+                print(f"SELENIUM PMC: Attempting to download from PDF URL: {pdf_url_on_page}")
+                try:
+                    # Use STANDARD_USER_AGENT
+                    pmc_session = requests.Session()
+                    pmc_session.headers.update({'User-Agent': STANDARD_USER_AGENT})
+
+                    pdf_response = pmc_session.get(pdf_url_on_page, timeout=60, stream=True, allow_redirects=True)
+                    pdf_response.raise_for_status()
+
+                    content_type = pdf_response.headers.get('Content-Type', '').lower()
+                    if 'application/pdf' in content_type:
+                        current_pdf_content = pdf_response.content
+                        if len(current_pdf_content) > 1024: # Min 1KB
+                            pdf_content = current_pdf_content
+                            status_message = f"OBTENIDO (PMC Selenium - {pdf_url_on_page})"
+                            print(f"SELENIUM PMC: Successfully downloaded PDF from {pdf_url_on_page}")
+                            pmc_session.close()
+                            break
+                        else:
+                            print(f"SELENIUM PMC: PDF from {pdf_url_on_page} is too small ({len(current_pdf_content)} bytes).")
+                    else:
+                        print(f"SELENIUM PMC: URL {pdf_url_on_page} did not return PDF content-type, but: {content_type}")
+                    pmc_session.close()
+                except requests.exceptions.HTTPError as e_http:
+                    print(f"SELENIUM PMC: HTTP error downloading {pdf_url_on_page}: {e_http.response.status_code}")
+                except requests.exceptions.RequestException as e_req:
+                    print(f"SELENIUM PMC: Request error downloading {pdf_url_on_page}: {e_req}")
+                except Exception as e_gen:
+                    print(f"SELENIUM PMC: Unexpected error downloading {pdf_url_on_page}: {e_gen}")
+            if pdf_content:
+                break
+
+        if not pdf_content: # If loop finishes and no PDF
+             status_message = f"FALLO - No suitable PDF link found or downloaded on PMC article page ({article_url if article_url else driver.current_url})"
+
+
+    except TimeoutException as e:
+        current_url_for_log = driver.current_url if driver else search_url
+        # Distinguish page load timeout from element location timeout
+        if current_url_for_log == search_url or (article_url and current_url_for_log == article_url and not pdf_content) or current_url_for_log == "about:blank":
+            print(f"SELENIUM PMC: Page load TimeoutException for {current_url_for_log} (DOI {doi}): {e}")
+            status_message = f"FALLO - Timeout carga página PMC (Selenium) ({current_url_for_log})"
+        else:
+            print(f"SELENIUM PMC: Element TimeoutException en PMC (Selenium) for DOI {doi} at {current_url_for_log}: {e}")
+            status_message = f"FALLO - Timeout localizando elemento en PMC (Selenium) ({current_url_for_log})"
+    except NoSuchElementException as e:
+        current_url_for_log = driver.current_url if driver else search_url
+        print(f"SELENIUM PMC: NoSuchElementException en PMC (Selenium) for DOI {doi} at {current_url_for_log}: {e}")
+        status_message = f"FALLO - Elemento no encontrado en PMC (Selenium) ({current_url_for_log})"
+    except Exception as e:
+        current_url_for_log = driver.current_url if driver else search_url
+        print(f"SELENIUM PMC: An unexpected error occurred with Selenium for DOI {doi} at {current_url_for_log}: {e}")
+        status_message = f"FALLO - Error inesperado en PMC (Selenium) ({current_url_for_log}, {str(e)[:100]})"
+
+    return pdf_content, status_message
+
 import itertools # Added for itertools.chain
 
 def download_from_pmc(doi, title, session): # Renamed from download_from_pmc_fixed
     print(f"FIXED PMC: Attempting PubMed Central download for DOI: {doi}")
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36'
-        }
-        session.headers.update(headers)
+        session.headers.update({'User-Agent': STANDARD_USER_AGENT})
 
         id_conv_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids={doi}&format=json&tool=my_awesome_tool&email=myemail@example.com"
         try:
@@ -611,6 +847,23 @@ def print_to_console(message, orig_stdout):
     print(message, file=orig_stdout)
 
 def download_pdfs_from_file():
+    # WebDriver will be initialized here
+    driver = None  # Initialize driver to None
+    try:
+        options = webdriver.ChromeOptions()
+        options.add_argument('--headless')
+        options.add_argument('--disable-gpu')  # Recommended for headless
+        options.add_argument('--no-sandbox') # Often needed in restricted environments
+        options.add_argument('--disable-dev-shm-usage') # Often needed in restricted environments
+        # Optional: Set a common user agent for Selenium if needed, though browser's default is usually fine
+        # options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+        print("Inicializando WebDriver de Selenium en modo headless...")
+        driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
+        print("WebDriver de Selenium inicializado correctamente.")
+    except Exception as e:
+        print(f"Error al inicializar WebDriver de Selenium: {e}")
+        print("Las descargas basadas en Selenium se omitirán.")
+        driver = None # Ensure driver is None if initialization fails
     original_stdout = sys.stdout 
     # root = tk.Tk(); root.withdraw() # GUI elements removed
     # log_window = None; log_text_widget = None # GUI elements removed
@@ -702,7 +955,7 @@ def download_pdfs_from_file():
         print("-----------------------------------------------------\n")
         # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
 
-        session = requests.Session(); session.headers.update({'User-Agent': 'Mozilla/5.0...'})
+        session = requests.Session(); session.headers.update({'User-Agent': STANDARD_USER_AGENT})
         all_articles_log = []; successful_articles_data = []; failed_articles_data = []; original_input_columns = []
         
         try: # File reading try block
@@ -881,6 +1134,7 @@ def download_pdfs_from_file():
 
                     # After Sci-Hub loop, if still no pdf_content, try Google Scholar
                     if not pdf_content:
+                        print(f"INFO: DOI {doi} - Attempting Google Scholar (direct request method)...")
                         # print(f"Sci-Hub attempts failed for DOI {doi}. Trying Google Scholar.") # Debug print commented out
                         gs_pdf_content, gs_status_msg = download_from_google_scholar(doi, effective_title, session)
                         if gs_pdf_content:
@@ -899,8 +1153,25 @@ def download_pdfs_from_file():
                             temp_failure_reason_for_log = gs_status_msg
                             temp_detailed_status_for_log = f"Failure_GoogleScholar_{gs_status_msg}"
 
+        if not pdf_content and driver: # Check if driver was initialized
+            print(f"INFO: DOI {doi} - Google Scholar (direct) failed. Attempting Google Scholar (Selenium method)...")
+            gs_selenium_pdf_content, gs_selenium_status_msg = download_with_selenium_google_scholar(driver, doi, effective_title)
+            if gs_selenium_pdf_content:
+                pdf_content = gs_selenium_pdf_content
+                download_successful_this_doi = True
+                successful_mirror_for_this_doi = "Google Scholar (Selenium)" # Or use gs_selenium_status_msg
+                overall_doi_status = gs_selenium_status_msg
+                mirror_attempts_details_for_doi.append(("Google Scholar (Selenium)", "OBTENIDO", gs_selenium_status_msg))
+                temp_detailed_status_for_log = f"Success_GoogleScholar_Selenium_{gs_selenium_status_msg}"
+                temp_failure_reason_for_log = ""
+            else:
+                mirror_attempts_details_for_doi.append(("Google Scholar (Selenium)", "FALLO", gs_selenium_status_msg))
+                temp_failure_reason_for_log = gs_selenium_status_msg # Update with Selenium GS failure
+                temp_detailed_status_for_log = f"Failure_GoogleScholar_Selenium_{gs_selenium_status_msg}"
+
                     # After Google Scholar attempt, if still no pdf_content, try PubMed Central
                     if not pdf_content:
+                        print(f"INFO: DOI {doi} - Attempting PubMed Central (direct API/scrape method)...")
                         # Optional: print(f"Sci-Hub and Google Scholar failed for {doi}. Trying PubMed Central.")
                         pmc_pdf_content, pmc_status_msg = download_from_pmc(doi, effective_title, session)
                         if pmc_pdf_content:
@@ -915,6 +1186,23 @@ def download_pdfs_from_file():
                             mirror_attempts_details_for_doi.append(("PubMed Central", "FALLO", pmc_status_msg))
                             temp_failure_reason_for_log = pmc_status_msg # Update with PMC failure reason
                             temp_detailed_status_for_log = f"Failure_PubMedCentral_{pmc_status_msg}"
+
+        if not pdf_content and driver: # Check if driver was initialized
+            print(f"INFO: DOI {doi} - PubMed Central (direct) failed. Attempting PubMed Central (Selenium method)...")
+            pmc_selenium_pdf_content, pmc_selenium_status_msg = download_with_selenium_pmc(driver, doi, effective_title)
+            if pmc_selenium_pdf_content:
+                pdf_content = pmc_selenium_pdf_content
+                download_successful_this_doi = True
+                # Use the status message from the function, it's more descriptive
+                successful_mirror_for_this_doi = pmc_selenium_status_msg
+                overall_doi_status = pmc_selenium_status_msg
+                mirror_attempts_details_for_doi.append(("PubMed Central (Selenium)", "OBTENIDO", pmc_selenium_status_msg))
+                temp_detailed_status_for_log = f"Success_PubMedCentral_Selenium_{pmc_selenium_status_msg}"
+                temp_failure_reason_for_log = ""
+            else:
+                mirror_attempts_details_for_doi.append(("PubMed Central (Selenium)", "FALLO", pmc_selenium_status_msg))
+                temp_failure_reason_for_log = pmc_selenium_status_msg # Update with Selenium PMC failure
+                temp_detailed_status_for_log = f"Failure_PubMedCentral_Selenium_{pmc_selenium_status_msg}"
 
                     end_time = datetime.now()
                     if download_successful_this_doi and pdf_content:
@@ -1075,6 +1363,7 @@ def download_pdfs_from_file():
 
                 # After Sci-Hub retry loop, if still no pdf_content_retry, try Google Scholar
                 if not pdf_content_retry:
+                    print(f"INFO: DOI {doi_to_retry} [RETRY] - Attempting Google Scholar (direct request method)...")
                     # print(f"Sci-Hub retry attempts failed for DOI {doi_to_retry}. Trying Google Scholar.") # Debug print commented out
                     gs_pdf_content_retry, gs_status_msg_retry = download_from_google_scholar(doi_to_retry, effective_title_for_retry, session)
                     if gs_pdf_content_retry:
@@ -1090,8 +1379,25 @@ def download_pdfs_from_file():
                         temp_failure_reason_for_retry_log = gs_status_msg_retry
                         temp_detailed_status_for_retry_log = f"Failure_RETRY_GoogleScholar_{gs_status_msg_retry}"
 
+                if not pdf_content_retry and driver: # Check if driver was initialized
+                    print(f"INFO: DOI {doi_to_retry} [RETRY] - Google Scholar (direct) failed. Attempting Google Scholar (Selenium method)...")
+                    gs_selenium_pdf_content_retry, gs_selenium_status_msg_retry = download_with_selenium_google_scholar(driver, doi_to_retry, effective_title_for_retry)
+                    if gs_selenium_pdf_content_retry:
+                        pdf_content_retry = gs_selenium_pdf_content_retry
+                        retry_successful_this_doi = True
+                        successful_mirror_for_retry = "Google Scholar (Selenium)" # Or use status msg
+                        overall_retry_status = gs_selenium_status_msg_retry
+                        mirror_attempts_details_for_retry.append(("Google Scholar (Selenium Retry)", "OBTENIDO", gs_selenium_status_msg_retry))
+                        temp_detailed_status_for_retry_log = f"Success_RETRY_GoogleScholar_Selenium_{gs_selenium_status_msg_retry}"
+                        temp_failure_reason_for_retry_log = ""
+                    else:
+                        mirror_attempts_details_for_retry.append(("Google Scholar (Selenium Retry)", "FALLO", gs_selenium_status_msg_retry))
+                        temp_failure_reason_for_retry_log = gs_selenium_status_msg_retry
+                        temp_detailed_status_for_retry_log = f"Failure_RETRY_GoogleScholar_Selenium_{gs_selenium_status_msg_retry}"
+
                 # If Sci-Hub retry and Google Scholar retry failed, try PubMed Central for retry
                 if not pdf_content_retry:
+                    print(f"INFO: DOI {doi_to_retry} [RETRY] - Attempting PubMed Central (direct API/scrape method)...")
                     # print(f"Sci-Hub & Google Scholar retry attempts failed for DOI {doi_to_retry}. Trying PubMed Central.") # Debug print
                     pmc_pdf_content_retry, pmc_status_msg_retry = download_from_pmc(doi_to_retry, effective_title_for_retry, session)
                     if pmc_pdf_content_retry:
@@ -1106,6 +1412,22 @@ def download_pdfs_from_file():
                         mirror_attempts_details_for_retry.append(("PubMed Central (Retry)", "FALLO", pmc_status_msg_retry))
                         temp_failure_reason_for_retry_log = pmc_status_msg_retry
                         temp_detailed_status_for_retry_log = f"Failure_RETRY_PubMedCentral_{pmc_status_msg_retry}"
+
+                if not pdf_content_retry and driver: # Check if driver was initialized
+                    print(f"INFO: DOI {doi_to_retry} [RETRY] - PubMed Central (direct) failed. Attempting PubMed Central (Selenium method)...")
+                    pmc_selenium_pdf_content_retry, pmc_selenium_status_msg_retry = download_with_selenium_pmc(driver, doi_to_retry, effective_title_for_retry)
+                    if pmc_selenium_pdf_content_retry:
+                        pdf_content_retry = pmc_selenium_pdf_content_retry
+                        retry_successful_this_doi = True
+                        successful_mirror_for_retry = pmc_selenium_status_msg_retry # Use descriptive status
+                        overall_retry_status = pmc_selenium_status_msg_retry
+                        mirror_attempts_details_for_retry.append(("PubMed Central (Selenium Retry)", "OBTENIDO", pmc_selenium_status_msg_retry))
+                        temp_detailed_status_for_retry_log = f"Success_RETRY_PMC_Selenium_{pmc_selenium_status_msg_retry}"
+                        temp_failure_reason_for_retry_log = ""
+                    else:
+                        mirror_attempts_details_for_retry.append(("PubMed Central (Selenium Retry)", "FALLO", pmc_selenium_status_msg_retry))
+                        temp_failure_reason_for_retry_log = pmc_selenium_status_msg_retry
+                        temp_detailed_status_for_retry_log = f"Failure_RETRY_PubMedCentral_Selenium_{pmc_selenium_status_msg_retry}"
 
                 retry_end_time_actual_attempt = datetime.now()
                 original_article_log_entry = next((log for log in all_articles_log if str(log.get('DOI', log.get('doi', ''))).strip() == doi_to_retry), None)
@@ -1205,6 +1527,14 @@ def download_pdfs_from_file():
         elif zip_creation_or_main_loop_error: print("Proceso interrumpido por error crítico inicial. No se generará resumen ni Excel.")
     
     finally: 
+        # WebDriver will be quit here
+        if driver:
+            print("Cerrando WebDriver de Selenium...")
+            try:
+                driver.quit()
+                print("WebDriver de Selenium cerrado correctamente.")
+            except Exception as e:
+                print(f"Error al cerrar WebDriver de Selenium: {e}")
         # restored_to_original_console = False # Not needed, stdout not redirected
         # Ensure stdout is the original, in case it was somehow still a TextRedirector
         # (though it shouldn't be if TextRedirector class and its usage are commented out)

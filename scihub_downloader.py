@@ -169,7 +169,7 @@ def extract_pdf_link_from_html(article_page_url, session):
     except Exception as e: # print(f"Error inesperado extrayendo PDF de {article_page_url}: {e}");
         return None
 
-def download_from_google_scholar(doi, title, session):
+def download_from_google_scholar_old(doi, title, session):
     """
     Tries to download a PDF from Google Scholar using DOI.
     """
@@ -252,119 +252,360 @@ def download_from_google_scholar(doi, title, session):
         # print(f"Unexpected error during Google Scholar processing for DOI {doi}: {e}")
         return None, f"FALLO - Error inesperado Google Scholar ({scholar_url})"
 
-def download_from_pmc(doi, title, session):
-    # print(f"Attempting PubMed Central download for DOI: {doi} via Efetch") # Keep internal prints commented for now
+# This is a copy of the existing download_from_google_scholar, slightly modified for testing
+# and with potential improvements.
+def download_from_google_scholar(doi, title, session): # Renamed from download_from_google_scholar_fixed
+    print(f"FIXED: Searching Google Scholar for DOI: {doi} (Title: {title if title else 'N/A'})")
+    scholar_url = f"https://scholar.google.com/scholar?hl=en&q={doi}" # Added hl=en for consistent language
+
     try:
-        # Step 1: Convert DOI to PMCID (current logic is fine)
-        id_conv_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids={doi}&format=json&tool=my_tool&email=my_email@example.com"
+        # Using a more common and recent-looking User-Agent
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Connection': 'keep-alive'
+        }
+        # It's important to handle cookies if Google Scholar starts requiring them for search results
+        # For now, session should handle basic cookies.
+
+        response = session.get(scholar_url, headers=headers, timeout=30)
+        response.raise_for_status()
+
+        # Check if the response itself is a PDF, which can happen if Google Scholar directly serves it
+        # or redirects to it.
+        content_type_initial = response.headers.get('Content-Type', '').lower()
+        if 'application/pdf' in content_type_initial:
+            print(f"FIXED: Initial response from {scholar_url} is a PDF. Content-Type: {content_type_initial}.")
+            if len(response.content) > 1000: # Basic sanity check for PDF size
+                 return response.content, f"OBTENIDO (Google Scholar Direct Response - {scholar_url})"
+            else:
+                print(f"FIXED: Initial response was PDF, but content too small. Suspicious. Proceeding to parse.")
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        potential_links = []
+
+        # Attempt 1: Look for common PDF link patterns
+        for link_tag in soup.find_all('a', href=True):
+            href = link_tag['href']
+            link_text = link_tag.get_text(strip=True).lower()
+
+            # More robust check for PDF links
+            is_pdf_link = False
+            if href.lower().endswith('.pdf'):
+                is_pdf_link = True
+            elif '[pdf]' in link_text or 'pdf' in link_text or link_tag.find(lambda tag: tag.name == 'span' and 'pdf' in tag.get_text(strip=True).lower()):
+                 is_pdf_link = True
+
+            if is_pdf_link:
+                # Ensure absolute URL
+                if not href.startswith('http'):
+                    href = urljoin(scholar_url, href)
+
+                # Avoid known non-PDF pages or recursive Google Scholar links more carefully
+                if 'scholar.google.com' in href.lower() and not href.lower().endswith('.pdf'): # Avoid linking back to scholar unless it's a direct PDF from scholar's domain
+                    continue
+                if any(x in href.lower() for x in [' Morales', ' Privacy', ' Terms', ' Sign in', ' Settings', ' My Citations', ' Profiles', ' cited by', ' related articles', ' versions', ' web search', 'javascript:void(0)']): # More exclusion patterns
+                    continue
+                if href.endswith("#"): # Skip empty fragment links
+                    continue
+
+                potential_links.append(href)
+
+        # Attempt 2: Look for PDF links within typical result blocks (gs_ri) and side blocks (gs_ggs)
+        for result_div in soup.find_all('div', class_='gs_ri'): # Each search result item
+            title_link_tag = result_div.find('h3', class_='gs_rt').find('a', href=True) if result_div.find('h3', class_='gs_rt') else None
+            pdf_div = result_div.find_next_sibling('div', class_='gs_ggs') # PDF often in a side div
+
+            if pdf_div:
+                pdf_link_tag = pdf_div.find('a', href=True)
+                if pdf_link_tag and pdf_link_tag['href'].lower().endswith('.pdf'):
+                    href = pdf_link_tag['href']
+                    if not href.startswith('http'): href = urljoin(scholar_url, href)
+                    potential_links.append(href)
+
+            if title_link_tag and title_link_tag['href'].lower().endswith('.pdf'): # If main title link is a PDF
+                 href = title_link_tag['href']
+                 if not href.startswith('http'): href = urljoin(scholar_url, href)
+                 potential_links.append(href)
+
+
+        # De-duplicate while preserving order
+        unique_potential_links = []
+        for plink in potential_links:
+            if plink not in unique_potential_links:
+                unique_potential_links.append(plink)
+
+        print(f"FIXED: Found {len(unique_potential_links)} unique potential PDF links on Google Scholar: {unique_potential_links}")
+
+        for pdf_url in unique_potential_links:
+            print(f"FIXED: Attempting to download PDF from: {pdf_url}")
+            try:
+                # Use a more forgiving HEAD request or skip if it causes issues
+                # Some servers might not handle HEAD well for dynamically generated PDFs
+                # For now, stick to the original HEAD then GET logic but be mindful
+                head_response = session.head(pdf_url, headers=headers, timeout=20, allow_redirects=True)
+                head_response.raise_for_status()
+                content_type = head_response.headers.get('Content-Type', '').lower()
+
+                if 'application/pdf' in content_type:
+                    print(f"FIXED: HEAD request successful for {pdf_url}. Content-Type: {content_type}. Proceeding with GET.")
+                    pdf_response = session.get(pdf_url, headers=headers, timeout=60, stream=True)
+                    pdf_response.raise_for_status()
+                    get_content_type = pdf_response.headers.get('Content-Type', '').lower()
+
+                    if 'application/pdf' in get_content_type:
+                        pdf_content = pdf_response.content
+                        if len(pdf_content) < 1000: # Check if PDF is too small (e.g. error page)
+                            print(f"FIXED: PDF from {pdf_url} is very small ({len(pdf_content)} bytes). May not be valid. Skipping.")
+                            continue # Try next link
+                        print(f"FIXED: Successfully downloaded PDF from {pdf_url}")
+                        domain_match = re.search(r'https?://(?:www\.)?([a-zA-Z0-9.-]+)(?:/|$)', pdf_url)
+                        source_domain = domain_match.group(1) if domain_match else "Unknown Domain"
+                        return pdf_content, f"OBTENIDO (Google Scholar via {source_domain})"
+                    else:
+                        print(f"FIXED: GET request for {pdf_url} did not return PDF content-type, but: {get_content_type}")
+                else:
+                    print(f"FIXED: HEAD request for {pdf_url} did not indicate PDF content-type: {content_type}. Trying GET anyway...")
+                    # Fallback: try GET even if HEAD didn't confirm PDF, some servers are tricky
+                    pdf_response = session.get(pdf_url, headers=headers, timeout=60, stream=True)
+                    pdf_response.raise_for_status() # Check for HTTP errors on GET
+                    get_content_type = pdf_response.headers.get('Content-Type', '').lower()
+                    if 'application/pdf' in get_content_type:
+                        pdf_content = pdf_response.content
+                        if len(pdf_content) < 1000:
+                            print(f"FIXED: PDF from {pdf_url} (after GET fallback) is very small ({len(pdf_content)} bytes). Skipping.")
+                            continue
+                        print(f"FIXED: Successfully downloaded PDF from {pdf_url} (after GET fallback)")
+                        domain_match = re.search(r'https?://(?:www\.)?([a-zA-Z0-9.-]+)(?:/|$)', pdf_url)
+                        source_domain = domain_match.group(1) if domain_match else "Unknown Domain"
+                        return pdf_content, f"OBTENIDO (Google Scholar via {source_domain} - GET Fallback)"
+                    else:
+                        print(f"FIXED: GET fallback for {pdf_url} also did not return PDF content-type: {get_content_type}")
+
+
+            except requests.exceptions.HTTPError as e:
+                print(f"FIXED: HTTP error when trying {pdf_url}: {e.response.status_code if e.response else 'Unknown status'}")
+            except requests.exceptions.Timeout:
+                print(f"FIXED: Timeout when trying {pdf_url}")
+            except requests.exceptions.RequestException as e:
+                print(f"FIXED: Request error when trying {pdf_url}: {e}")
+            except Exception as e:
+                print(f"FIXED: Unexpected error when trying {pdf_url}: {e}")
+
+        return None, f"FALLO - No PDF en Google Scholar ({scholar_url})"
+
+    except requests.exceptions.RequestException as e:
+        print(f"FIXED: Error searching Google Scholar for DOI {doi}: {e}")
+        return None, f"FALLO - Error búsqueda Google Scholar ({scholar_url})"
+    except Exception as e:
+        print(f"FIXED: Unexpected error during Google Scholar processing for DOI {doi}: {e}")
+        return None, f"FALLO - Error inesperado Google Scholar ({scholar_url})"
+
+import itertools # Added for itertools.chain
+
+def download_from_pmc(doi, title, session): # Renamed from download_from_pmc_fixed
+    print(f"FIXED PMC: Attempting PubMed Central download for DOI: {doi}")
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36'
+        }
+        session.headers.update(headers)
+
+        id_conv_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids={doi}&format=json&tool=my_awesome_tool&email=myemail@example.com"
         try:
             response_id_conv = session.get(id_conv_url, timeout=20)
             response_id_conv.raise_for_status()
             data_id_conv = response_id_conv.json()
+            # print(f"FIXED PMC: IDConv response: {data_id_conv}") # Verbose, remove for final
         except requests.exceptions.RequestException as e:
-            return None, f"FALLO - Error API conversión PMCID para {doi} ({str(e)[:30]})"
-        except json.JSONDecodeError: # Make sure import json is present
+            return None, f"FALLO - Error API conversión PMCID para {doi} ({str(e)[:50]})"
+        except json.JSONDecodeError:
             return None, f"FALLO - Error decodificando respuesta PMCID para {doi}"
 
         pmcid = None
         if data_id_conv.get("records") and len(data_id_conv["records"]) > 0:
-            if data_id_conv["records"][0].get("pmcid"):
-                pmcid = data_id_conv["records"][0]["pmcid"]
+            record = data_id_conv["records"][0]
+            if record.get("pmcid"):
+                 pmcid = record["pmcid"]
+                 if record.get("status") == "error" and record.get("errmsg") == "invalid article id":
+                      # print(f"FIXED PMC: IDConv reported 'invalid article id' for {doi} but still provided PMCID {pmcid}. Proceeding cautiously.") # Verbose
+                      pass # Allow to proceed if PMCID was somehow returned despite error
+            elif record.get("status") == "error":
+                return None, f"FALLO - PMCID no encontrado, API devolvió '{record.get('errmsg', 'Unknown error')}' para DOI {doi}"
 
         if not pmcid:
-            return None, f"FALLO - PMCID no encontrado para DOI {doi}"
+            return None, f"FALLO - PMCID no encontrado para DOI {doi} (Respuesta: {data_id_conv})"
 
-        # Step 2: Primary Method - Fetch PMC Article XML via E-utilities efetch
-        efetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pmc&id={pmcid}&rettype=xml&tool=my_tool&email=my_email@example.com"
+        # print(f"FIXED PMC: Found PMCID: {pmcid} for DOI: {doi}") # Verbose
+
+        efetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pmc&id={pmcid}&rettype=xml&tool=my_awesome_tool&email=myemail@example.com"
         try:
+            # print(f"FIXED PMC: Fetching Efetch XML from: {efetch_url}") # Verbose
             response_efetch = session.get(efetch_url, timeout=45)
             response_efetch.raise_for_status()
             xml_content_bytes = response_efetch.content
             root = ET.fromstring(xml_content_bytes)
+
             pdf_filename_from_xml = None
+            pdf_url_from_xml_constructed = None
             namespaces = {'xlink': 'http://www.w3.org/1999/xlink'}
-            potential_uri_tags = root.findall('.//self-uri[@content-type="pdf"]', namespaces) + \
-                                 root.findall('.//uri[@content-type="pdf"]', namespaces)
-            for uri_tag in potential_uri_tags:
-                href = uri_tag.get('{http://www.w3.org/1999/xlink}href')
-                if not href: href = uri_tag.get('href')
-                if not href: href = uri_tag.text
-                if href and (href.lower().endswith('.pdf') or '.pdf?' in href.lower()):
-                    pdf_filename_from_xml = href.strip()
+
+            for tag_name_to_search in ["self-uri", "uri"]:
+                combined_iterator = itertools.chain(
+                    root.iterfind(f".//{tag_name_to_search}"),
+                    root.iterfind(f".//{{{namespaces['xlink']}}}{tag_name_to_search}")
+                )
+                for element in combined_iterator:
+                    # print(f"FIXED PMC: XML Efetch: Checking element <{element.tag}> with attributes {element.attrib}") # Verbose
+                    content_type = element.get("content-type", "").lower()
+                    href_xlink = element.get(f"{{{namespaces['xlink']}}}href")
+                    href_plain = element.get("href")
+
+                    current_href_value = None
+                    if href_xlink:
+                        current_href_value = href_xlink
+                    elif href_plain:
+                        current_href_value = href_plain
+
+                    if "pdf" in content_type and current_href_value:
+                        current_href_value = current_href_value.strip()
+                        if current_href_value.lower().endswith('.pdf') or '.pdf?' in current_href_value.lower():
+                            pdf_filename_from_xml = current_href_value
+                            # print(f"FIXED PMC: XML Efetch: Using PDF filename/link from content-type='{content_type}': {pdf_filename_from_xml}") # Verbose
+                            break
+                if pdf_filename_from_xml:
                     break
+
+            if not pdf_filename_from_xml:
+                # print(f"FIXED PMC: XML Efetch: No 'content-type包含pdf' link found in self-uri/uri. Checking article-id.") # Verbose
+                for element in root.iterfind(".//article-id[@pub-id-type='pmc-pdf']"):
+                    if element.text:
+                        href_value = element.text.strip()
+                        if href_value.lower().endswith('.pdf') or '.pdf?' in href_value.lower():
+                            pdf_filename_from_xml = href_value
+                            # print(f"FIXED PMC: XML Efetch: Using PDF filename from article-id: {pdf_filename_from_xml}") # Verbose
+                            break
+
             if pdf_filename_from_xml:
-                pdf_download_url = ""
                 if pdf_filename_from_xml.startswith('http://') or pdf_filename_from_xml.startswith('https://'):
-                    pdf_download_url = pdf_filename_from_xml
+                    pdf_url_from_xml_constructed = pdf_filename_from_xml
                 elif not pdf_filename_from_xml.startswith('/'):
-                    pdf_download_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/pdf/{pdf_filename_from_xml}"
+                    pdf_url_from_xml_constructed = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/pdf/{pdf_filename_from_xml}"
                 else:
-                    pdf_download_url = urljoin(f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/", pdf_filename_from_xml)
+                    pdf_url_from_xml_constructed = urljoin(f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/", pdf_filename_from_xml)
+                # print(f"FIXED PMC: XML Efetch: Constructed download URL: {pdf_url_from_xml_constructed}") # Verbose
+
+                # print(f"FIXED PMC: Attempting download from Efetch-XML-derived URL: {pdf_url_from_xml_constructed}") # Verbose
                 try:
-                    head_response = session.head(pdf_download_url, timeout=20, allow_redirects=True)
+                    head_response = session.head(pdf_url_from_xml_constructed, timeout=20, allow_redirects=True)
                     head_response.raise_for_status()
-                    content_type = head_response.headers.get('Content-Type', '').lower()
-                    if 'application/pdf' in content_type:
-                        pdf_response = session.get(pdf_download_url, timeout=60, stream=True)
+                    content_type_head = head_response.headers.get('Content-Type', '').lower()
+                    # print(f"FIXED PMC: Efetch HEAD from {pdf_url_from_xml_constructed} Content-Type: {content_type_head}") # Verbose
+
+                    if 'application/pdf' in content_type_head:
+                        pdf_response = session.get(pdf_url_from_xml_constructed, timeout=60, stream=True)
                         pdf_response.raise_for_status()
-                        get_content_type = pdf_response.headers.get('Content-Type', '').lower()
-                        if 'application/pdf' in get_content_type:
-                            return pdf_response.content, f"OBTENIDO (PMC Efetch {pmcid})"
-                except requests.exceptions.RequestException:
+                        content_type_get = pdf_response.headers.get('Content-Type', '').lower()
+                        # print(f"FIXED PMC: Efetch GET (after HEAD success) from {pdf_url_from_xml_constructed} Content-Type: {content_type_get}") # Verbose
+                        if 'application/pdf' in content_type_get:
+                            pdf_content_bytes = pdf_response.content
+                            if len(pdf_content_bytes) > 1000:
+                                # print(f"FIXED PMC: Successfully downloaded PDF via Efetch XML (HEAD then GET) from {pdf_url_from_xml_constructed}") # Verbose
+                                return pdf_content_bytes, f"OBTENIDO (PMC Efetch XML {pmcid})"
+                            # else: print(f"FIXED PMC: Efetch GET from {pdf_url_from_xml_constructed} PDF content too small.") # Verbose
+                        # else: print(f"FIXED PMC: Efetch GET from {pdf_url_from_xml_constructed} did not return PDF content-type.") # Verbose
+                    else:
+                        # print(f"FIXED PMC: Efetch HEAD from {pdf_url_from_xml_constructed} did not indicate PDF. Trying GET anyway...") # Verbose
+                        pdf_response = session.get(pdf_url_from_xml_constructed, timeout=60, stream=True)
+                        pdf_response.raise_for_status()
+                        content_type_get = pdf_response.headers.get('Content-Type', '').lower()
+                        # print(f"FIXED PMC: Efetch GET (after HEAD failed) from {pdf_url_from_xml_constructed} Content-Type: {content_type_get}") # Verbose
+                        if 'application/pdf' in content_type_get:
+                            pdf_content_bytes = pdf_response.content
+                            if len(pdf_content_bytes) > 1000:
+                                # print(f"FIXED PMC: Successfully downloaded PDF via Efetch XML (GET fallback) from {pdf_url_from_xml_constructed}") # Verbose
+                                return pdf_content_bytes, f"OBTENIDO (PMC Efetch XML - GET Fallback {pmcid})"
+                            # else: print(f"FIXED PMC: Efetch GET (fallback) from {pdf_url_from_xml_constructed} PDF content too small.") # Verbose
+                        # else: print(f"FIXED PMC: Efetch GET (fallback) from {pdf_url_from_xml_constructed} did not return PDF content-type.") # Verbose
+                except requests.exceptions.RequestException as e_dl:
+                    # print(f"FIXED PMC: Efetch XML download attempt from {pdf_url_from_xml_constructed} failed: {e_dl}") # Verbose
                     pass
-        except requests.exceptions.RequestException:
+            # else:
+                 # print(f"FIXED PMC: XML Efetch: No suitable PDF link/filename found in XML after all checks.") # Verbose
+
+        except requests.exceptions.RequestException: # Simplified from e_efetch for brevity in main script
             pass
-        except ET.ParseError:
+        except ET.ParseError: # Simplified from e_xml
             pass
 
         # Step 3: Fallback Method - HTML Scraping
+        # print(f"FIXED PMC: Efetch XML method failed or no PDF. Trying HTML scraping for {pmcid}.") # Verbose
         article_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/"
         try:
+            # print(f"FIXED PMC: Fetching HTML page: {article_url}") # Verbose
             response_html = session.get(article_url, timeout=30)
             response_html.raise_for_status()
         except requests.exceptions.RequestException as e:
-            return None, f"FALLO - Error obteniendo página HTML PMC ({article_url}, {str(e)[:30]})"
+            return None, f"FALLO - Error obteniendo página HTML PMC ({article_url}, {str(e)[:50]})"
 
         soup = BeautifulSoup(response_html.content, 'html.parser')
         potential_html_pdf_links = []
         selectors = [
             'div.format-menu a[href$=".pdf"]', 'ul.format-menu a[href$=".pdf"]',
-            'div.full-text-links a[href$=".pdf"]', 'a.format-pdf[href$=".pdf"]',
-            'a[title*="PDF"][href$=".pdf"]', 'a[data-format="pdf"][href$=".pdf"]'
+            'div.full-text-links a[href$=".pdf"]', 'li.pdf-link a[href$=".pdf"]',
+            'a.format-pdf[href$=".pdf"]', 'a.pdf-button[href$=".pdf"]', 'a.pdf-btn[href$=".pdf"]',
+            'a[title*="PDF"][href$=".pdf"]', 'a[data-format="pdf"][href$=".pdf"]',
+            'a[download$=".pdf"]',
+            'div.buttons.article-actions a.pdf-download[href*="pdf"]'
         ]
         for selector in selectors:
             for link_tag in soup.select(selector):
                 href = link_tag.get('href')
-                if href: potential_html_pdf_links.append(urljoin(article_url, href))
+                if href: potential_html_pdf_links.append(urljoin(article_url, href.strip()))
+
         if not potential_html_pdf_links:
-            for link_tag in soup.find_all('a', href=True):
-                href = link_tag['href']
-                if href and href.lower().endswith('.pdf') and f"/articles/{pmcid.lower()}/pdf/" in href.lower():
-                    potential_html_pdf_links.append(urljoin(article_url, href))
-                elif href and href.lower().endswith('.pdf') and 'pdf' in link_tag.get_text().lower():
-                     potential_html_pdf_links.append(urljoin(article_url, href))
+            # print("FIXED PMC: Specific selectors found no links. Trying broader search for links ending in .pdf.") # Verbose
+            for link_tag in soup.find_all('a', href=lambda h: h is not None and (h.lower().endswith('.pdf') or '.pdf?' in h.lower())):
+                href = link_tag.get('href')
+                if pmcid.lower() in href.lower() or "articles" in href.lower() or "ftrender" in href.lower():
+                     potential_html_pdf_links.append(urljoin(article_url, href.strip()))
+
         unique_html_pdf_links = []
         for plink in potential_html_pdf_links:
             if plink not in unique_html_pdf_links: unique_html_pdf_links.append(plink)
 
+        # print(f"FIXED PMC: Found {len(unique_html_pdf_links)} unique potential PDF links via HTML scraping: {unique_html_pdf_links}") # Verbose
+
         if not unique_html_pdf_links:
             return None, f"FALLO - PDF no encontrado en HTML página PMC ({article_url})"
 
-        # THIS IS THE MODIFIED LOOP FOR HTML SCRAPING:
         for pdf_url_html in unique_html_pdf_links:
+            # print(f"FIXED PMC: Attempting download from HTML-scraped URL: {pdf_url_html}") # Verbose
             try:
                 pdf_response = session.get(pdf_url_html, timeout=60, stream=True)
                 pdf_response.raise_for_status()
                 content_type = pdf_response.headers.get('Content-Type', '').lower()
+                # print(f"FIXED PMC: HTML GET from {pdf_url_html} Content-Type: {content_type}") # Verbose
                 if 'application/pdf' in content_type:
-                    return pdf_response.content, f"OBTENIDO (PMC HTML {pmcid})"
-            except requests.exceptions.RequestException as e:
+                    pdf_data = pdf_response.content
+                    if len(pdf_data) > 1000:
+                        # print(f"FIXED PMC: Successfully downloaded PDF via HTML scraping from {pdf_url_html}") # Verbose
+                        return pdf_data, f"OBTENIDO (PMC HTML {pmcid})"
+                    # else: print(f"FIXED PMC: HTML GET from {pdf_url_html} PDF content too small.") # Verbose
+                # else: print(f"FIXED PMC: HTML GET from {pdf_url_html} did not return PDF content-type.") # Verbose
+            except requests.exceptions.RequestException: # Simplified e_html_dl
+                # print(f"FIXED PMC: HTML scrape download from {pdf_url_html} failed: {e_html_dl}") # Verbose
                 continue
 
         return None, f"FALLO - No se pudo descargar PDF desde enlaces HTML PMC ({article_url})"
 
     except Exception as e:
-        return None, f"FALLO - Error inesperado en PubMed Central para {doi} ({str(e)[:30]})"
+        # import traceback # Keep for debugging if needed, but remove for final script
+        # print(f"FIXED PMC: Unexpected error for DOI {doi}: {e}\n{traceback.format_exc()}") # Verbose
+        return None, f"FALLO - Error inesperado en PubMed Central para {doi} ({str(e)[:50]})"
 
 def print_to_console(message, orig_stdout):
     print(message, file=orig_stdout)

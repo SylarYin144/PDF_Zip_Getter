@@ -1155,10 +1155,10 @@ def download_pdfs_from_file():
                             temp_failure_reason_for_log = gs_status_msg
                             temp_detailed_status_for_log = f"Failure_GoogleScholar_{gs_status_msg}"
 
-        if not pdf_content and driver: # Check if driver was initialized
-            print(f"INFO: DOI {doi} - Google Scholar (direct) failed. Attempting Google Scholar (Selenium method)...")
-            gs_selenium_pdf_content, gs_selenium_status_msg = download_with_selenium_google_scholar(driver, doi, effective_title)
-            if gs_selenium_pdf_content:
+                    if not pdf_content and driver: # Check if driver was initialized
+                        print(f"INFO: DOI {doi} - Google Scholar (direct) failed. Attempting Google Scholar (Selenium method)...")
+                        gs_selenium_pdf_content, gs_selenium_status_msg = download_with_selenium_google_scholar(driver, doi, effective_title)
+                        if gs_selenium_pdf_content:
                 pdf_content = gs_selenium_pdf_content
                 download_successful_this_doi = True
                 successful_mirror_for_this_doi = "Google Scholar (Selenium)" # Or use gs_selenium_status_msg
@@ -1166,10 +1166,10 @@ def download_pdfs_from_file():
                 mirror_attempts_details_for_doi.append(("Google Scholar (Selenium)", "OBTENIDO", gs_selenium_status_msg))
                 temp_detailed_status_for_log = f"Success_GoogleScholar_Selenium_{gs_selenium_status_msg}"
                 temp_failure_reason_for_log = ""
-            else:
-                mirror_attempts_details_for_doi.append(("Google Scholar (Selenium)", "FALLO", gs_selenium_status_msg))
-                temp_failure_reason_for_log = gs_selenium_status_msg # Update with Selenium GS failure
-                temp_detailed_status_for_log = f"Failure_GoogleScholar_Selenium_{gs_selenium_status_msg}"
+                        else:
+                            mirror_attempts_details_for_doi.append(("Google Scholar (Selenium)", "FALLO", gs_selenium_status_msg))
+                            temp_failure_reason_for_log = gs_selenium_status_msg # Update with Selenium GS failure
+                            temp_detailed_status_for_log = f"Failure_GoogleScholar_Selenium_{gs_selenium_status_msg}"
 
                     # After Google Scholar attempt, if still no pdf_content, try PubMed Central
                     if not pdf_content:
@@ -1189,10 +1189,10 @@ def download_pdfs_from_file():
                             temp_failure_reason_for_log = pmc_status_msg # Update with PMC failure reason
                             temp_detailed_status_for_log = f"Failure_PubMedCentral_{pmc_status_msg}"
 
-        if not pdf_content and driver: # Check if driver was initialized
-            print(f"INFO: DOI {doi} - PubMed Central (direct) failed. Attempting PubMed Central (Selenium method)...")
-            pmc_selenium_pdf_content, pmc_selenium_status_msg = download_with_selenium_pmc(driver, doi, effective_title)
-            if pmc_selenium_pdf_content:
+                    if not pdf_content and driver: # Check if driver was initialized
+                        print(f"INFO: DOI {doi} - PubMed Central (direct) failed. Attempting PubMed Central (Selenium method)...")
+                        pmc_selenium_pdf_content, pmc_selenium_status_msg = download_with_selenium_pmc(driver, doi, effective_title)
+                        if pmc_selenium_pdf_content:
                 pdf_content = pmc_selenium_pdf_content
                 download_successful_this_doi = True
                 # Use the status message from the function, it's more descriptive
@@ -1201,10 +1201,10 @@ def download_pdfs_from_file():
                 mirror_attempts_details_for_doi.append(("PubMed Central (Selenium)", "OBTENIDO", pmc_selenium_status_msg))
                 temp_detailed_status_for_log = f"Success_PubMedCentral_Selenium_{pmc_selenium_status_msg}"
                 temp_failure_reason_for_log = ""
-            else:
-                mirror_attempts_details_for_doi.append(("PubMed Central (Selenium)", "FALLO", pmc_selenium_status_msg))
-                temp_failure_reason_for_log = pmc_selenium_status_msg # Update with Selenium PMC failure
-                temp_detailed_status_for_log = f"Failure_PubMedCentral_Selenium_{pmc_selenium_status_msg}"
+                        else:
+                            mirror_attempts_details_for_doi.append(("PubMed Central (Selenium)", "FALLO", pmc_selenium_status_msg))
+                            temp_failure_reason_for_log = pmc_selenium_status_msg # Update with Selenium PMC failure
+                            temp_detailed_status_for_log = f"Failure_PubMedCentral_Selenium_{pmc_selenium_status_msg}"
 
                     end_time = datetime.now()
                     if download_successful_this_doi and pdf_content:

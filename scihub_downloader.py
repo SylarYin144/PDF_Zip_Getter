@@ -419,17 +419,17 @@ def download_with_selenium_google_scholar(driver, doi, title):
     status_message = f"FALLO - No PDF en Google Scholar (Selenium) ({scholar_url})"
 
     try:
-        driver.set_page_load_timeout(30) # Set page load timeout
+        driver.set_page_load_timeout(60) # Increased page load timeout
         driver.get(scholar_url)
         # Wait for the page to load and results to be present
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 15).until( # Increased wait for initial results
             EC.presence_of_element_located((By.ID, "gs_res_ccl_mid"))
         )
 
         # Try to find links with "[PDF]" text first - these are often direct links
         pdf_links_elements = []
         try:
-            pdf_links_elements = WebDriverWait(driver, 5).until(
+            pdf_links_elements = WebDriverWait(driver, 10).until( # Increased wait
                 EC.presence_of_all_elements_located((By.PARTIAL_LINK_TEXT, "[PDF]"))
             )
         except TimeoutException:
@@ -438,7 +438,7 @@ def download_with_selenium_google_scholar(driver, doi, title):
         # If no "[PDF]" links, try to find any link containing '.pdf' in href
         if not pdf_links_elements:
             try:
-                pdf_links_elements = WebDriverWait(driver, 5).until(
+                pdf_links_elements = WebDriverWait(driver, 10).until( # Increased wait
                     EC.presence_of_all_elements_located((By.XPATH, "//a[contains(@href, '.pdf')]"))
                 )
             except TimeoutException:
@@ -464,6 +464,7 @@ def download_with_selenium_google_scholar(driver, doi, title):
                     pdf_response.raise_for_status() # Check for HTTP errors
 
                     content_type = pdf_response.headers.get('Content-Type', '').lower()
+                    print(f"SELENIUM GS: URL {pdf_url} - Content-Type: {content_type}") # Added logging for content type
                     if 'application/pdf' in content_type:
                         # Check if content is substantial (more than a few KB, e.g. 1KB)
                         # Some error pages might be served as PDF
@@ -477,7 +478,7 @@ def download_with_selenium_google_scholar(driver, doi, title):
                         else:
                             print(f"SELENIUM GS: PDF from {pdf_url} is too small ({len(current_pdf_content)} bytes). May not be valid. Trying next link.")
                     else:
-                        print(f"SELENIUM GS: URL {pdf_url} did not return PDF content-type, but: {content_type}")
+                        print(f"SELENIUM GS: URL {pdf_url} is not 'application/pdf'. It is '{content_type}'. PDF might be embedded or require browser context. Skipping this link for direct requests.")
                     gs_session.close()
                 except requests.exceptions.HTTPError as e_http:
                     print(f"SELENIUM GS: HTTP error downloading {pdf_url}: {e_http.response.status_code}")
@@ -513,11 +514,11 @@ def download_with_selenium_pmc(driver, doi, title):
     article_url = None # To store the actual article page URL if found
 
     try:
-        driver.set_page_load_timeout(30) # Set page load timeout
+        driver.set_page_load_timeout(60) # Increased page load timeout
         driver.get(search_url)
 
         # Wait for search results to appear (look for a common container or result item)
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 15).until( # Increased wait
             EC.presence_of_element_located((By.CLASS_NAME, "rprt")) # Common class for search result items
         )
 
@@ -537,7 +538,7 @@ def download_with_selenium_pmc(driver, doi, title):
                 article_link_element = possible_article_links[0]
                 article_url = article_link_element.get_attribute('href')
                 print(f"SELENIUM PMC: Found article link: {article_url}. Navigating...")
-                driver.set_page_load_timeout(30)
+                driver.set_page_load_timeout(60) # Increased page load timeout
                 driver.get(article_url)
                 print(f"SELENIUM PMC: Navigation to article page {article_url} presumably successful.")
             else:
@@ -565,7 +566,7 @@ def download_with_selenium_pmc(driver, doi, title):
 
         for by, selector_val in selectors:
             try:
-                elements = WebDriverWait(driver, 3).until(
+                elements = WebDriverWait(driver, 5).until( # Increased wait
                     EC.presence_of_all_elements_located((by, selector_val))
                 )
                 if elements:
@@ -599,6 +600,7 @@ def download_with_selenium_pmc(driver, doi, title):
                     pdf_response.raise_for_status()
 
                     content_type = pdf_response.headers.get('Content-Type', '').lower()
+                    print(f"SELENIUM PMC: URL {pdf_url_on_page} - Content-Type: {content_type}") # Added logging for content type
                     if 'application/pdf' in content_type:
                         current_pdf_content = pdf_response.content
                         if len(current_pdf_content) > 1024: # Min 1KB
@@ -608,9 +610,9 @@ def download_with_selenium_pmc(driver, doi, title):
                             pmc_session.close()
                             break
                         else:
-                            print(f"SELENIUM PMC: PDF from {pdf_url_on_page} is too small ({len(current_pdf_content)} bytes).")
+                            print(f"SELENIUM PMC: PDF from {pdf_url_on_page} is too small ({len(current_pdf_content)} bytes). Considered invalid.")
                     else:
-                        print(f"SELENIUM PMC: URL {pdf_url_on_page} did not return PDF content-type, but: {content_type}")
+                        print(f"SELENIUM PMC: URL {pdf_url_on_page} is not 'application/pdf'. It is '{content_type}'. PDF might be embedded or require browser context. Skipping this link for direct requests.")
                     pmc_session.close()
                 except requests.exceptions.HTTPError as e_http:
                     print(f"SELENIUM PMC: HTTP error downloading {pdf_url_on_page}: {e_http.response.status_code}")

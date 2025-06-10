@@ -419,10 +419,10 @@ def download_with_selenium_google_scholar(driver, doi, title):
     status_message = f"FALLO - No PDF en Google Scholar (Selenium) ({scholar_url})"
 
     try:
-        driver.set_page_load_timeout(60) # Increased page load timeout
+        driver.set_page_load_timeout(90) # Further increased page load timeout
         driver.get(scholar_url)
         # Wait for the page to load and results to be present
-        WebDriverWait(driver, 15).until( # Increased wait for initial results
+        WebDriverWait(driver, 25).until( # Further increased wait for initial results
             EC.presence_of_element_located((By.ID, "gs_res_ccl_mid"))
         )
 
@@ -514,11 +514,11 @@ def download_with_selenium_pmc(driver, doi, title):
     article_url = None # To store the actual article page URL if found
 
     try:
-        driver.set_page_load_timeout(60) # Increased page load timeout
+        driver.set_page_load_timeout(90) # Further increased page load timeout
         driver.get(search_url)
 
         # Wait for search results to appear (look for a common container or result item)
-        WebDriverWait(driver, 15).until( # Increased wait
+        WebDriverWait(driver, 25).until( # Further increased wait
             EC.presence_of_element_located((By.CLASS_NAME, "rprt")) # Common class for search result items
         )
 
@@ -538,7 +538,7 @@ def download_with_selenium_pmc(driver, doi, title):
                 article_link_element = possible_article_links[0]
                 article_url = article_link_element.get_attribute('href')
                 print(f"SELENIUM PMC: Found article link: {article_url}. Navigating...")
-                driver.set_page_load_timeout(60) # Increased page load timeout
+                driver.set_page_load_timeout(90) # Further increased page load timeout
                 driver.get(article_url)
                 print(f"SELENIUM PMC: Navigation to article page {article_url} presumably successful.")
             else:
@@ -604,24 +604,64 @@ def download_with_selenium_pmc(driver, doi, title):
                     if 'application/pdf' in content_type:
                         current_pdf_content = pdf_response.content
                         if len(current_pdf_content) > 1024: # Min 1KB
-                            pdf_content = current_pdf_content
-                            status_message = f"OBTENIDO (PMC Selenium - {pdf_url_on_page})"
-                            print(f"SELENIUM PMC: Successfully downloaded PDF from {pdf_url_on_page}")
-                            pmc_session.close()
-                            break
+                            pdf_content = current_pdf_content # Assign to function-scoped variable
+                            status_message = f"OBTENIDO (PMC Selenium Direct - {pdf_url_on_page})"
+                            print(f"SELENIUM PMC: Successfully downloaded PDF from {pdf_url_on_page} (direct requests).")
+                            # pmc_session.close() # session is closed below
+                            # break # Break from this inner try, outer loop will break if pdf_content is set
                         else:
-                            print(f"SELENIUM PMC: PDF from {pdf_url_on_page} is too small ({len(current_pdf_content)} bytes). Considered invalid.")
-                    else:
-                        print(f"SELENIUM PMC: URL {pdf_url_on_page} is not 'application/pdf'. It is '{content_type}'. PDF might be embedded or require browser context. Skipping this link for direct requests.")
-                    pmc_session.close()
+                            print(f"SELENIUM PMC: PDF from {pdf_url_on_page} (direct requests) is too small ({len(current_pdf_content)} bytes). Considered invalid.")
+                    else: # Content-Type is not PDF, try Selenium navigation for embed
+                        print(f"SELENIUM PMC: URL {pdf_url_on_page} returned HTML via requests. Attempting Selenium navigation to it and searching for embedded PDF.")
+                        try:
+                            driver.get(pdf_url_on_page)
+                            WebDriverWait(driver, 20).until(lambda d: d.execute_script('return document.readyState') == 'complete')
+
+                            embed_element = WebDriverWait(driver, 10).until(
+                                EC.presence_of_element_located((By.XPATH, "//embed[@type='application/pdf']"))
+                            )
+                            if embed_element:
+                                new_pdf_src = embed_element.get_attribute('src')
+                                if new_pdf_src:
+                                    print(f"SELENIUM PMC: Found embedded PDF src: {new_pdf_src}. Attempting download...")
+                                    if not new_pdf_src.startswith('http'):
+                                        new_pdf_src = urljoin(driver.current_url, new_pdf_src)
+
+                                    try:
+                                        embed_session = requests.Session()
+                                        embed_session.headers.update({'User-Agent': STANDARD_USER_AGENT})
+                                        embed_pdf_response = embed_session.get(new_pdf_src, timeout=60, stream=True, allow_redirects=True)
+                                        embed_pdf_response.raise_for_status()
+                                        embed_content_type = embed_pdf_response.headers.get('Content-Type', '').lower()
+                                        print(f"SELENIUM PMC: Embedded URL {new_pdf_src} - Content-Type: {embed_content_type}")
+
+                                        if 'application/pdf' in embed_content_type:
+                                            current_pdf_content = embed_pdf_response.content
+                                            if len(current_pdf_content) > 1024:
+                                                pdf_content = current_pdf_content
+                                                status_message = f"OBTENIDO (PMC Selenium Embed - {new_pdf_src})"
+                                                print(f"SELENIUM PMC: Successfully downloaded PDF from embedded src: {new_pdf_src}")
+                                            else:
+                                                print(f"SELENIUM PMC: Embedded PDF from {new_pdf_src} is too small.")
+                                        else:
+                                            print(f"SELENIUM PMC: Embedded URL {new_pdf_src} is not 'application/pdf'. It is '{embed_content_type}'.")
+                                        embed_session.close()
+                                    except Exception as e_embed_dl:
+                                        print(f"SELENIUM PMC: Error downloading embedded PDF src {new_pdf_src}: {e_embed_dl}")
+                        except TimeoutException: # Timeout for driver.get(pdf_url_on_page) or finding embed
+                            print(f"SELENIUM PMC: Timeout when Selenium navigated to/processed supposed PDF URL (now HTML view): {pdf_url_on_page} or no embed found.")
+                        except Exception as e_nav_embed: # Other errors during navigation or embed finding
+                            print(f"SELENIUM PMC: Error during Selenium navigation/embed search for {pdf_url_on_page}: {e_nav_embed}")
+                    pmc_session.close() # Close session for the initial requests.get()
                 except requests.exceptions.HTTPError as e_http:
-                    print(f"SELENIUM PMC: HTTP error downloading {pdf_url_on_page}: {e_http.response.status_code}")
+                    print(f"SELENIUM PMC: HTTP error downloading {pdf_url_on_page} (initial requests): {e_http.response.status_code}")
                 except requests.exceptions.RequestException as e_req:
-                    print(f"SELENIUM PMC: Request error downloading {pdf_url_on_page}: {e_req}")
+                    print(f"SELENIUM PMC: Request error downloading {pdf_url_on_page} (initial requests): {e_req}")
                 except Exception as e_gen:
-                    print(f"SELENIUM PMC: Unexpected error downloading {pdf_url_on_page}: {e_gen}")
-            if pdf_content:
-                break
+                    print(f"SELENIUM PMC: Unexpected error downloading {pdf_url_on_page} (initial requests): {e_gen}")
+
+            if pdf_content: # If PDF was obtained either directly or via embed
+                break # Break from the for loop iterating through pdf_link_elements
 
         if not pdf_content: # If loop finishes and no PDF
              status_message = f"FALLO - No suitable PDF link found or downloaded on PMC article page ({article_url if article_url else driver.current_url})"

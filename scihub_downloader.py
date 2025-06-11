@@ -28,6 +28,66 @@ MIRROR_SWITCH_DELAY_SECONDS = 3
 STANDARD_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36'
 # --- End Configuration Constants ---
 
+import base64 # For JS PDF Fetch helper
+
+# Helper function for fetching PDF content via JavaScript
+def get_pdf_content_via_js(driver, pdf_url):
+    script = """
+    const callback = arguments[arguments.length - 1];
+    fetch(arguments[0])
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Network response was not ok: ' + response.status + ' ' + response.statusText);
+            }
+            return response.blob();
+        })
+        .then(blob => {
+            if (blob.type !== 'application/pdf') {
+                // Allow for cases where Content-Type might be octet-stream but it's a PDF
+                // This is a common issue with some servers.
+                // We might rely on the URL ending with .pdf or other heuristics if needed,
+                // but for now, a strict check on blob.type might be too restrictive.
+                // Let's log it but proceed if the blob has size.
+                console.warn('JS Fetch: Content-Type is ' + blob.type + ' for URL ' + arguments[0] + '. Proceeding if blob has size.');
+                if (blob.type !== 'application/pdf' && !arguments[0].toLowerCase().endsWith('.pdf') && blob.type !== 'application/octet-stream') {
+                     // If not PDF, not ending with .pdf, and not octet-stream, then it's likely not a PDF.
+                     throw new Error('Content-Type is not application/pdf or octet-stream: ' + blob.type);
+                }
+            }
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                // reader.result is data:application/pdf;base64,xxxxx
+                // We only want the xxxxx part
+                const base64Marker = ';base64,';
+                const base64Data = reader.result.substring(reader.result.indexOf(base64Marker) + base64Marker.length);
+                callback(base64Data);
+            };
+            reader.onerror = (err) => {
+                console.error('FileReader error:', err);
+                callback({error: 'FileReader error: ' + err.toString()});
+            };
+            reader.readAsDataURL(blob);
+        })
+        .catch(error => {
+            console.error('JS Fetch error:', error);
+            callback({error: 'JS Fetch error: ' + error.toString()});
+        });
+    """
+    try:
+        # Increased async script timeout
+        driver.set_script_timeout(90) # seconds for the async script to complete
+        result = driver.execute_async_script(script, pdf_url)
+        if isinstance(result, dict) and 'error' in result:
+            print(f"JS Fetch Helper: Error reported from JS for {pdf_url}: {result['error']}")
+            return None
+        if result:
+            return base64.b64decode(result)
+        print(f"JS Fetch Helper: No result or empty result from JS for {pdf_url}")
+        return None
+    except Exception as e:
+        print(f"JS Fetch Helper: Exception during execute_async_script for {pdf_url}: {e}")
+        return None
+
 # class TextRedirector(object): # GUI logging disabled
 #     def __init__(self, widget, original_stdout_ref, tag="stdout"):
 #         self.widget = widget
@@ -419,7 +479,7 @@ def download_with_selenium_google_scholar(driver, doi, title):
     status_message = f"FALLO - No PDF en Google Scholar (Selenium) ({scholar_url})"
 
     try:
-        driver.set_page_load_timeout(90) # Further increased page load timeout
+        driver.set_page_load_timeout(120) # Set to 120s
         driver.get(scholar_url)
         # Wait for the page to load and results to be present
         WebDriverWait(driver, 25).until( # Further increased wait for initial results
@@ -444,57 +504,105 @@ def download_with_selenium_google_scholar(driver, doi, title):
             except TimeoutException:
                 print(f"SELENIUM GS: No links with '.pdf' in href found for {doi}.")
 
-        print(f"SELENIUM GS: Found {len(pdf_links_elements)} potential PDF links.")
+        print(f"SELENIUM GS: Found {len(pdf_links_elements)} potential PDF link elements.")
 
-        for link_element in pdf_links_elements:
-            pdf_url = link_element.get_attribute('href')
-            if pdf_url:
-                print(f"SELENIUM GS: Attempting to download from URL: {pdf_url}")
+        # Extract hrefs to avoid issues with stale elements if page changes during clicks
+        pdf_urls_to_try = []
+        for link_el in pdf_links_elements:
+            href = link_el.get_attribute('href')
+            if href and href not in pdf_urls_to_try: # Avoid duplicates and None
+                pdf_urls_to_try.append(href)
+
+        print(f"SELENIUM GS: Extracted {len(pdf_urls_to_try)} unique URLs to attempt.")
+
+        for pdf_url_attempt in pdf_urls_to_try:
+            print(f"SELENIUM GS: Processing link: {pdf_url_attempt}")
+
+            # Attempt 1: Direct JS Fetch (if URL *looks* like a PDF)
+            if pdf_url_attempt.lower().endswith('.pdf'):
+                print(f"SELENIUM GS: Attempting direct JS fetch for PDF-like URL: {pdf_url_attempt}")
+                pdf_content = get_pdf_content_via_js(driver, pdf_url_attempt)
+                if pdf_content and len(pdf_content) > 1024:
+                    print(f"SELENIUM GS: Successfully fetched PDF via JS from direct URL: {pdf_url_attempt}")
+                    return pdf_content, f"OBTENIDO (Google Scholar Selenium JS Fetch - {pdf_url_attempt})"
+                else:
+                    print(f"SELENIUM GS: JS fetch from {pdf_url_attempt} did not yield valid PDF content.")
+                    pdf_content = None # Reset pdf_content if fetch failed
+
+            # Attempt 2: Navigate and then JS Fetch or Embed Check
+            if not pdf_content: # If direct JS fetch failed or URL wasn't initially PDF-like
+                print(f"SELENIUM GS: Attempting navigation to: {pdf_url_attempt}")
                 try:
-                    # Use requests to download the PDF
-                    # It's good practice to use a session for requests if making multiple calls,
-                    # but for a single download, a direct get is fine.
-                    # Ensure a User-Agent is set.
-                    # Use STANDARD_USER_AGENT
-                    # Create a new requests session for this download to ensure no cookie conflicts with SciHub session
-                    gs_session = requests.Session()
-                    gs_session.headers.update({'User-Agent': STANDARD_USER_AGENT})
+                    driver.get(pdf_url_attempt)
+                    time.sleep(5) # Allow time for redirects or PDF viewer to load
+                    current_url_after_nav = driver.current_url
+                    print(f"SELENIUM GS: Navigated. Current URL: {current_url_after_nav}")
 
-                    pdf_response = gs_session.get(pdf_url, timeout=60, stream=True, allow_redirects=True)
-                    pdf_response.raise_for_status() # Check for HTTP errors
-
-                    content_type = pdf_response.headers.get('Content-Type', '').lower()
-                    print(f"SELENIUM GS: URL {pdf_url} - Content-Type: {content_type}") # Added logging for content type
-                    if 'application/pdf' in content_type:
-                        # Check if content is substantial (more than a few KB, e.g. 1KB)
-                        # Some error pages might be served as PDF
-                        current_pdf_content = pdf_response.content
-                        if len(current_pdf_content) > 1024: # Check if PDF is larger than 1KB
-                            pdf_content = current_pdf_content
-                            status_message = f"OBTENIDO (Google Scholar Selenium - {pdf_url})"
-                            print(f"SELENIUM GS: Successfully downloaded PDF from {pdf_url}")
-                            gs_session.close()
-                            break # Exit loop once a PDF is successfully downloaded
-                        else:
-                            print(f"SELENIUM GS: PDF from {pdf_url} is too small ({len(current_pdf_content)} bytes). May not be valid. Trying next link.")
+                    # Try JS fetch on the current URL (might have redirected to the actual PDF)
+                    pdf_content = get_pdf_content_via_js(driver, current_url_after_nav)
+                    if pdf_content and len(pdf_content) > 1024:
+                        print(f"SELENIUM GS: Successfully fetched PDF via JS after navigation from {pdf_url_attempt} to {current_url_after_nav}")
+                        return pdf_content, f"OBTENIDO (Google Scholar Selenium Nav & JS Fetch - {current_url_after_nav})"
                     else:
-                        print(f"SELENIUM GS: URL {pdf_url} is not 'application/pdf'. It is '{content_type}'. PDF might be embedded or require browser context. Skipping this link for direct requests.")
-                    gs_session.close()
-                except requests.exceptions.HTTPError as e_http:
-                    print(f"SELENIUM GS: HTTP error downloading {pdf_url}: {e_http.response.status_code}")
-                except requests.exceptions.RequestException as e_req:
-                    print(f"SELENIUM GS: Request error downloading {pdf_url}: {e_req}")
-                except Exception as e_gen:
-                    print(f"SELENIUM GS: Unexpected error downloading {pdf_url}: {e_gen}")
-            if pdf_content: # If we got content in the inner loop, break outer
-                break
+                        print(f"SELENIUM GS: JS fetch from {current_url_after_nav} (after nav from {pdf_url_attempt}) did not yield PDF.")
+                        pdf_content = None
 
+                    # If still no PDF, look for an embed/iframe on the current page
+                    if not pdf_content:
+                        print(f"SELENIUM GS: Checking for embedded PDF on {current_url_after_nav}")
+                        # Check for <embed type="application/pdf">
+                        try:
+                            embed_element = WebDriverWait(driver, 5).until(
+                                EC.presence_of_element_located((By.XPATH, "//embed[@type='application/pdf']"))
+                            )
+                            if embed_element:
+                                embed_src = embed_element.get_attribute('src')
+                                if embed_src:
+                                    embed_src_abs = urljoin(current_url_after_nav, embed_src)
+                                    print(f"SELENIUM GS: Found <embed> with src: {embed_src_abs}. Attempting JS fetch.")
+                                    pdf_content = get_pdf_content_via_js(driver, embed_src_abs)
+                                    if pdf_content and len(pdf_content) > 1024:
+                                        print(f"SELENIUM GS: Successfully fetched PDF from <embed> src: {embed_src_abs}")
+                                        return pdf_content, f"OBTENIDO (Google Scholar Selenium Embed JS Fetch - {embed_src_abs})"
+                                    else:
+                                        pdf_content = None # Reset
+                        except TimeoutException:
+                            print(f"SELENIUM GS: No <embed type='application/pdf'> found on {current_url_after_nav}.")
+
+                        # Check for <iframe src="*.pdf"> (simplified iframe check)
+                        if not pdf_content:
+                            try:
+                                iframe_element = WebDriverWait(driver, 5).until(
+                                    EC.presence_of_element_located((By.XPATH, "//iframe[contains(@src, '.pdf')]"))
+                                )
+                                if iframe_element:
+                                    iframe_src = iframe_element.get_attribute('src')
+                                    if iframe_src:
+                                        iframe_src_abs = urljoin(current_url_after_nav, iframe_src)
+                                        print(f"SELENIUM GS: Found <iframe> with PDF-like src: {iframe_src_abs}. Attempting JS fetch.")
+                                        pdf_content = get_pdf_content_via_js(driver, iframe_src_abs)
+                                        if pdf_content and len(pdf_content) > 1024:
+                                            print(f"SELENIUM GS: Successfully fetched PDF from <iframe> src: {iframe_src_abs}")
+                                            return pdf_content, f"OBTENIDO (Google Scholar Selenium Iframe JS Fetch - {iframe_src_abs})"
+                                        else:
+                                            pdf_content = None # Reset
+                            except TimeoutException:
+                                print(f"SELENIUM GS: No <iframe> with PDF-like src found on {current_url_after_nav}.")
+
+                except TimeoutException as e_nav_timeout:
+                    print(f"SELENIUM GS: Timeout during navigation or subsequent operations for {pdf_url_attempt}: {e_nav_timeout}")
+                except Exception as e_nav:
+                    print(f"SELENIUM GS: Error during navigation or subsequent operations for {pdf_url_attempt}: {e_nav}")
+
+            if pdf_content: # Should have returned if successful
+                return pdf_content, status_message # Should not be reached if logic above is correct
+
+        status_message = f"FALLO - No PDF obtained after trying all potential links (Selenium GS)"
     except TimeoutException as e:
-        # Check if it's a page load timeout vs element timeout by inspecting current_url vs scholar_url
-        if driver.current_url == scholar_url or driver.current_url == "about:blank": # Heuristic: still on or trying to load the main search page
-            print(f"SELENIUM GS: Page load TimeoutException for {scholar_url}: {e}")
+        if driver.current_url == scholar_url or "scholar.google.com/scholar?hl=en&q=" in driver.current_url or driver.current_url == "about:blank":
+            print(f"SELENIUM GS: Page load TimeoutException for initial search {scholar_url}: {e}")
             status_message = f"FALLO - Timeout carga página Google Scholar (Selenium) ({scholar_url})"
-        else: # Timeout likely occurred waiting for an element
+        else:
             print(f"SELENIUM GS: Element TimeoutException en Google Scholar (Selenium) para {doi}: {e}")
             status_message = f"FALLO - Timeout localizando elemento en Google Scholar (Selenium) ({driver.current_url})"
     except NoSuchElementException as e:
@@ -504,7 +612,7 @@ def download_with_selenium_google_scholar(driver, doi, title):
         print(f"SELENIUM GS: An unexpected error occurred with Selenium for DOI {doi} at {driver.current_url if driver else scholar_url}: {e}")
         status_message = f"FALLO - Error inesperado en Google Scholar (Selenium) ({driver.current_url if driver else scholar_url}, {str(e)[:100]})"
 
-    return pdf_content, status_message
+    return None, status_message
 
 def download_with_selenium_pmc(driver, doi, title):
     print(f"SELENIUM PMC: Searching PubMed Central for DOI: {doi} (Title: {title if title else 'N/A'})")
@@ -514,7 +622,7 @@ def download_with_selenium_pmc(driver, doi, title):
     article_url = None # To store the actual article page URL if found
 
     try:
-        driver.set_page_load_timeout(90) # Further increased page load timeout
+        driver.set_page_load_timeout(120) # Set to 120s
         driver.get(search_url)
 
         # Wait for search results to appear (look for a common container or result item)
@@ -538,7 +646,7 @@ def download_with_selenium_pmc(driver, doi, title):
                 article_link_element = possible_article_links[0]
                 article_url = article_link_element.get_attribute('href')
                 print(f"SELENIUM PMC: Found article link: {article_url}. Navigating...")
-                driver.set_page_load_timeout(90) # Further increased page load timeout
+                driver.set_page_load_timeout(120) # Set to 120s
                 driver.get(article_url)
                 print(f"SELENIUM PMC: Navigation to article page {article_url} presumably successful.")
             else:
@@ -577,95 +685,107 @@ def download_with_selenium_pmc(driver, doi, title):
 
         # Deduplicate elements if necessary (though order of selectors provides some priority)
         # For now, just iterate through what we found
-        print(f"SELENIUM PMC: Found {len(pdf_link_elements)} potential PDF links on article page {article_url if article_url else driver.current_url}.")
+        print(f"SELENIUM PMC: Found {len(pdf_link_elements)} potential PDF link elements on article page {article_url if article_url else driver.current_url}.")
 
-        for link_element in pdf_link_elements:
-            pdf_url_on_page = link_element.get_attribute('href')
-            if pdf_url_on_page:
-                # Ensure URL is absolute
-                if not pdf_url_on_page.startswith('http'):
-                    base_for_relative = driver.current_url # Base URL of the current page
-                    # A more robust way to get the base for ncbi.nlm.nih.gov
-                    if "ncbi.nlm.nih.gov" in base_for_relative:
+        # Extract hrefs to avoid issues with stale elements
+        pdf_urls_to_try = []
+        for link_el in pdf_link_elements:
+            href = link_el.get_attribute('href')
+            if href and href not in pdf_urls_to_try:
+                 # Ensure URL is absolute before adding
+                if not href.startswith('http'):
+                    base_for_relative = driver.current_url
+                    if "ncbi.nlm.nih.gov" in base_for_relative: # Make sure we use the main domain for relative paths
                         base_for_relative = "https://www.ncbi.nlm.nih.gov"
-                    pdf_url_on_page = urljoin(base_for_relative, pdf_url_on_page)
+                    href = urljoin(base_for_relative, href)
+                pdf_urls_to_try.append(href)
 
-                print(f"SELENIUM PMC: Attempting to download from PDF URL: {pdf_url_on_page}")
+        print(f"SELENIUM PMC: Extracted {len(pdf_urls_to_try)} unique absolute URLs to attempt.")
+
+        for pdf_url_attempt in pdf_urls_to_try:
+            print(f"SELENIUM PMC: Processing link: {pdf_url_attempt}")
+
+            # Attempt 1: Direct JS Fetch (if URL *looks* like a PDF)
+            if pdf_url_attempt.lower().endswith('.pdf'):
+                print(f"SELENIUM PMC: Attempting direct JS fetch for PDF-like URL: {pdf_url_attempt}")
+                pdf_content = get_pdf_content_via_js(driver, pdf_url_attempt)
+                if pdf_content and len(pdf_content) > 1024:
+                    print(f"SELENIUM PMC: Successfully fetched PDF via JS from direct URL: {pdf_url_attempt}")
+                    return pdf_content, f"OBTENIDO (PMC Selenium JS Fetch Direct - {pdf_url_attempt})"
+                else:
+                    print(f"SELENIUM PMC: JS fetch from {pdf_url_attempt} (direct) did not yield valid PDF.")
+                    pdf_content = None # Reset
+
+            # Attempt 2: Navigate to the URL (it might be an HTML page with an embed, or a redirector)
+            if not pdf_content:
+                print(f"SELENIUM PMC: Attempting navigation to: {pdf_url_attempt}")
                 try:
-                    # Use STANDARD_USER_AGENT
-                    pmc_session = requests.Session()
-                    pmc_session.headers.update({'User-Agent': STANDARD_USER_AGENT})
+                    driver.get(pdf_url_attempt)
+                    time.sleep(7) # Allow time for redirects or PDF viewer to load
+                    current_url_after_nav = driver.current_url
+                    print(f"SELENIUM PMC: Navigated. Current URL is now: {current_url_after_nav}")
 
-                    pdf_response = pmc_session.get(pdf_url_on_page, timeout=60, stream=True, allow_redirects=True)
-                    pdf_response.raise_for_status()
+                    # Try JS fetch on the current URL after navigation
+                    print(f"SELENIUM PMC: Attempting JS fetch on current URL post-navigation: {current_url_after_nav}")
+                    pdf_content = get_pdf_content_via_js(driver, current_url_after_nav)
+                    if pdf_content and len(pdf_content) > 1024:
+                        print(f"SELENIUM PMC: Successfully fetched PDF via JS from {current_url_after_nav} (after nav from {pdf_url_attempt})")
+                        return pdf_content, f"OBTENIDO (PMC Selenium Nav & JS Fetch - {current_url_after_nav})"
+                    else:
+                        print(f"SELENIUM PMC: JS fetch from {current_url_after_nav} (after nav) did not yield PDF.")
+                        pdf_content = None
 
-                    content_type = pdf_response.headers.get('Content-Type', '').lower()
-                    print(f"SELENIUM PMC: URL {pdf_url_on_page} - Content-Type: {content_type}") # Added logging for content type
-                    if 'application/pdf' in content_type:
-                        current_pdf_content = pdf_response.content
-                        if len(current_pdf_content) > 1024: # Min 1KB
-                            pdf_content = current_pdf_content # Assign to function-scoped variable
-                            status_message = f"OBTENIDO (PMC Selenium Direct - {pdf_url_on_page})"
-                            print(f"SELENIUM PMC: Successfully downloaded PDF from {pdf_url_on_page} (direct requests).")
-                            # pmc_session.close() # session is closed below
-                            # break # Break from this inner try, outer loop will break if pdf_content is set
-                        else:
-                            print(f"SELENIUM PMC: PDF from {pdf_url_on_page} (direct requests) is too small ({len(current_pdf_content)} bytes). Considered invalid.")
-                    else: # Content-Type is not PDF, try Selenium navigation for embed
-                        print(f"SELENIUM PMC: URL {pdf_url_on_page} returned HTML via requests. Attempting Selenium navigation to it and searching for embedded PDF.")
+                    # If still no PDF, look for an embed/iframe on the current page
+                    if not pdf_content:
+                        print(f"SELENIUM PMC: Checking for embedded PDF on {current_url_after_nav}")
+                        # Check for <embed type="application/pdf">
                         try:
-                            driver.get(pdf_url_on_page)
-                            WebDriverWait(driver, 20).until(lambda d: d.execute_script('return document.readyState') == 'complete')
-
                             embed_element = WebDriverWait(driver, 10).until(
                                 EC.presence_of_element_located((By.XPATH, "//embed[@type='application/pdf']"))
                             )
                             if embed_element:
-                                new_pdf_src = embed_element.get_attribute('src')
-                                if new_pdf_src:
-                                    print(f"SELENIUM PMC: Found embedded PDF src: {new_pdf_src}. Attempting download...")
-                                    if not new_pdf_src.startswith('http'):
-                                        new_pdf_src = urljoin(driver.current_url, new_pdf_src)
+                                embed_src = embed_element.get_attribute('src')
+                                if embed_src:
+                                    embed_src_abs = urljoin(current_url_after_nav, embed_src)
+                                    print(f"SELENIUM PMC: Found <embed> with src: {embed_src_abs}. Attempting JS fetch.")
+                                    pdf_content = get_pdf_content_via_js(driver, embed_src_abs)
+                                    if pdf_content and len(pdf_content) > 1024:
+                                        print(f"SELENIUM PMC: Successfully fetched PDF from <embed> src: {embed_src_abs}")
+                                        return pdf_content, f"OBTENIDO (PMC Selenium Embed JS Fetch - {embed_src_abs})"
+                                    else:
+                                        pdf_content = None # Reset
+                        except TimeoutException:
+                            print(f"SELENIUM PMC: No <embed type='application/pdf'> found on {current_url_after_nav}.")
 
-                                    try:
-                                        embed_session = requests.Session()
-                                        embed_session.headers.update({'User-Agent': STANDARD_USER_AGENT})
-                                        embed_pdf_response = embed_session.get(new_pdf_src, timeout=60, stream=True, allow_redirects=True)
-                                        embed_pdf_response.raise_for_status()
-                                        embed_content_type = embed_pdf_response.headers.get('Content-Type', '').lower()
-                                        print(f"SELENIUM PMC: Embedded URL {new_pdf_src} - Content-Type: {embed_content_type}")
-
-                                        if 'application/pdf' in embed_content_type:
-                                            current_pdf_content = embed_pdf_response.content
-                                            if len(current_pdf_content) > 1024:
-                                                pdf_content = current_pdf_content
-                                                status_message = f"OBTENIDO (PMC Selenium Embed - {new_pdf_src})"
-                                                print(f"SELENIUM PMC: Successfully downloaded PDF from embedded src: {new_pdf_src}")
-                                            else:
-                                                print(f"SELENIUM PMC: Embedded PDF from {new_pdf_src} is too small.")
+                        # Check for <iframe src="*.pdf"> (simplified iframe check)
+                        if not pdf_content:
+                            try:
+                                iframe_element = WebDriverWait(driver, 5).until(
+                                    EC.presence_of_element_located((By.XPATH, "//iframe[contains(@src, '.pdf')] | //iframe[contains(@src, 'pdfviewer')]")) # Added pdfviewer
+                                )
+                                if iframe_element:
+                                    iframe_src = iframe_element.get_attribute('src')
+                                    if iframe_src:
+                                        iframe_src_abs = urljoin(current_url_after_nav, iframe_src)
+                                        print(f"SELENIUM PMC: Found <iframe> with PDF-like src: {iframe_src_abs}. Attempting JS fetch.")
+                                        pdf_content = get_pdf_content_via_js(driver, iframe_src_abs)
+                                        if pdf_content and len(pdf_content) > 1024:
+                                            print(f"SELENIUM PMC: Successfully fetched PDF from <iframe> src: {iframe_src_abs}")
+                                            return pdf_content, f"OBTENIDO (PMC Selenium Iframe JS Fetch - {iframe_src_abs})"
                                         else:
-                                            print(f"SELENIUM PMC: Embedded URL {new_pdf_src} is not 'application/pdf'. It is '{embed_content_type}'.")
-                                        embed_session.close()
-                                    except Exception as e_embed_dl:
-                                        print(f"SELENIUM PMC: Error downloading embedded PDF src {new_pdf_src}: {e_embed_dl}")
-                        except TimeoutException: # Timeout for driver.get(pdf_url_on_page) or finding embed
-                            print(f"SELENIUM PMC: Timeout when Selenium navigated to/processed supposed PDF URL (now HTML view): {pdf_url_on_page} or no embed found.")
-                        except Exception as e_nav_embed: # Other errors during navigation or embed finding
-                            print(f"SELENIUM PMC: Error during Selenium navigation/embed search for {pdf_url_on_page}: {e_nav_embed}")
-                    pmc_session.close() # Close session for the initial requests.get()
-                except requests.exceptions.HTTPError as e_http:
-                    print(f"SELENIUM PMC: HTTP error downloading {pdf_url_on_page} (initial requests): {e_http.response.status_code}")
-                except requests.exceptions.RequestException as e_req:
-                    print(f"SELENIUM PMC: Request error downloading {pdf_url_on_page} (initial requests): {e_req}")
-                except Exception as e_gen:
-                    print(f"SELENIUM PMC: Unexpected error downloading {pdf_url_on_page} (initial requests): {e_gen}")
+                                            pdf_content = None # Reset
+                            except TimeoutException:
+                                print(f"SELENIUM PMC: No <iframe> with PDF-like src found on {current_url_after_nav}.")
 
-            if pdf_content: # If PDF was obtained either directly or via embed
-                break # Break from the for loop iterating through pdf_link_elements
+                except TimeoutException as e_nav_timeout:
+                    print(f"SELENIUM PMC: Timeout during navigation to or processing of {pdf_url_attempt}: {e_nav_timeout}")
+                except Exception as e_nav:
+                    print(f"SELENIUM PMC: Error during navigation to or processing of {pdf_url_attempt}: {e_nav}")
 
-        if not pdf_content: # If loop finishes and no PDF
-             status_message = f"FALLO - No suitable PDF link found or downloaded on PMC article page ({article_url if article_url else driver.current_url})"
+            if pdf_content: # Should have returned if successful
+                 return pdf_content, status_message # Should not be reached
 
+        status_message = f"FALLO - No PDF obtained after trying all potential links (Selenium PMC)"
 
     except TimeoutException as e:
         current_url_for_log = driver.current_url if driver else search_url
@@ -1176,29 +1296,9 @@ def download_pdfs_from_file():
                             if mirror_idx < len(mirrors_to_try_for_this_doi) - 1:
                                 time.sleep(user_mirror_switch_delay)
 
-                    # After Sci-Hub loop, if still no pdf_content, try Google Scholar
-                    if not pdf_content:
-                        print(f"INFO: DOI {doi} - Attempting Google Scholar (direct request method)...")
-                        # print(f"Sci-Hub attempts failed for DOI {doi}. Trying Google Scholar.") # Debug print commented out
-                        gs_pdf_content, gs_status_msg = download_from_google_scholar(doi, effective_title, session)
-                        if gs_pdf_content:
-                            pdf_content = gs_pdf_content
-                            download_successful_this_doi = True
-                            successful_mirror_for_this_doi = "Google Scholar"
-                            overall_doi_status = gs_status_msg
-                            mirror_attempts_details_for_doi.append(("Google Scholar", "OBTENIDO", gs_status_msg))
-                            temp_detailed_status_for_log = f"Success_GoogleScholar_{gs_status_msg}"
-                            temp_failure_reason_for_log = "" # Clear overall DOI failure as GS succeeded
-                        else:
-                            mirror_attempts_details_for_doi.append(("Google Scholar", "FALLO", gs_status_msg))
-                            # temp_failure_reason_for_log is already set if all Sci-Hub mirrors failed.
-                            # If Sci-Hub mirrors didn't run (e.g., empty list), then gs_status_msg becomes the failure reason.
-                            # If Sci-Hub mirrors ran and failed, gs_status_msg will overwrite the last Sci-Hub specific error.
-                            temp_failure_reason_for_log = gs_status_msg
-                            temp_detailed_status_for_log = f"Failure_GoogleScholar_{gs_status_msg}"
-
+                    # After Sci-Hub loop, if still no pdf_content, try Google Scholar (Selenium method)
                     if not pdf_content and driver: # Check if driver was initialized
-                        print(f"INFO: DOI {doi} - Google Scholar (direct) failed. Attempting Google Scholar (Selenium method)...")
+                        print(f"INFO: DOI {doi} - Attempting Google Scholar (Selenium method)...")
                         gs_selenium_pdf_content, gs_selenium_status_msg = download_with_selenium_google_scholar(driver, doi, effective_title)
                         if gs_selenium_pdf_content:
                             pdf_content = gs_selenium_pdf_content
@@ -1213,26 +1313,9 @@ def download_pdfs_from_file():
                             temp_failure_reason_for_log = gs_selenium_status_msg
                             temp_detailed_status_for_log = f"Failure_GoogleScholar_Selenium_{gs_selenium_status_msg}"
 
-                    # After Google Scholar attempt, if still no pdf_content, try PubMed Central
-                    if not pdf_content:
-                        print(f"INFO: DOI {doi} - Attempting PubMed Central (direct API/scrape method)...")
-                        # Optional: print(f"Sci-Hub and Google Scholar failed for {doi}. Trying PubMed Central.")
-                        pmc_pdf_content, pmc_status_msg = download_from_pmc(doi, effective_title, session)
-                        if pmc_pdf_content:
-                            pdf_content = pmc_pdf_content
-                            download_successful_this_doi = True
-                            successful_mirror_for_this_doi = pmc_status_msg # e.g., "OBTENIDO (PubMed Central PMCID_HERE)"
-                            overall_doi_status = pmc_status_msg
-                            mirror_attempts_details_for_doi.append(("PubMed Central", "OBTENIDO", pmc_status_msg))
-                            temp_detailed_status_for_log = f"Success_PubMedCentral_{pmc_status_msg}"
-                            temp_failure_reason_for_log = "" # Clear failure reason as PMC succeeded
-                        else:
-                            mirror_attempts_details_for_doi.append(("PubMed Central", "FALLO", pmc_status_msg))
-                            temp_failure_reason_for_log = pmc_status_msg # Update with PMC failure reason
-                            temp_detailed_status_for_log = f"Failure_PubMedCentral_{pmc_status_msg}"
-
+                    # After Google Scholar (Selenium) attempt, if still no pdf_content, try PubMed Central (Selenium method)
                     if not pdf_content and driver: # Check if driver was initialized
-                        print(f"INFO: DOI {doi} - PubMed Central (direct) failed. Attempting PubMed Central (Selenium method)...")
+                        print(f"INFO: DOI {doi} - Attempting PubMed Central (Selenium method)...")
                         pmc_selenium_pdf_content, pmc_selenium_status_msg = download_with_selenium_pmc(driver, doi, effective_title)
                         if pmc_selenium_pdf_content:
                             pdf_content = pmc_selenium_pdf_content
@@ -1404,26 +1487,9 @@ def download_pdfs_from_file():
                         if mirror_idx_retry < len(mirrors_for_retry) - 1:
                             time.sleep(user_mirror_switch_delay)
 
-                # After Sci-Hub retry loop, if still no pdf_content_retry, try Google Scholar
-                if not pdf_content_retry:
-                    print(f"INFO: DOI {doi_to_retry} [RETRY] - Attempting Google Scholar (direct request method)...")
-                    # print(f"Sci-Hub retry attempts failed for DOI {doi_to_retry}. Trying Google Scholar.") # Debug print commented out
-                    gs_pdf_content_retry, gs_status_msg_retry = download_from_google_scholar(doi_to_retry, effective_title_for_retry, session)
-                    if gs_pdf_content_retry:
-                        pdf_content_retry = gs_pdf_content_retry
-                        retry_successful_this_doi = True
-                        successful_mirror_for_retry = "Google Scholar"
-                        overall_retry_status = gs_status_msg_retry
-                        mirror_attempts_details_for_retry.append(("Google Scholar (Retry)", "OBTENIDO", gs_status_msg_retry))
-                        temp_detailed_status_for_retry_log = f"Success_RETRY_GoogleScholar_{gs_status_msg_retry}"
-                        temp_failure_reason_for_retry_log = ""
-                    else:
-                        mirror_attempts_details_for_retry.append(("Google Scholar (Retry)", "FALLO", gs_status_msg_retry))
-                        temp_failure_reason_for_retry_log = gs_status_msg_retry
-                        temp_detailed_status_for_retry_log = f"Failure_RETRY_GoogleScholar_{gs_status_msg_retry}"
-
+                # After Sci-Hub retry loop, if still no pdf_content_retry, try Google Scholar (Selenium method)
                 if not pdf_content_retry and driver: # Check if driver was initialized
-                    print(f"INFO: DOI {doi_to_retry} [RETRY] - Google Scholar (direct) failed. Attempting Google Scholar (Selenium method)...")
+                    print(f"INFO: DOI {doi_to_retry} [RETRY] - Attempting Google Scholar (Selenium method)...")
                     gs_selenium_pdf_content_retry, gs_selenium_status_msg_retry = download_with_selenium_google_scholar(driver, doi_to_retry, effective_title_for_retry)
                     if gs_selenium_pdf_content_retry:
                         pdf_content_retry = gs_selenium_pdf_content_retry
@@ -1438,26 +1504,9 @@ def download_pdfs_from_file():
                         temp_failure_reason_for_retry_log = gs_selenium_status_msg_retry
                         temp_detailed_status_for_retry_log = f"Failure_RETRY_GoogleScholar_Selenium_{gs_selenium_status_msg_retry}"
 
-                # If Sci-Hub retry and Google Scholar retry failed, try PubMed Central for retry
-                if not pdf_content_retry:
-                    print(f"INFO: DOI {doi_to_retry} [RETRY] - Attempting PubMed Central (direct API/scrape method)...")
-                    # print(f"Sci-Hub & Google Scholar retry attempts failed for DOI {doi_to_retry}. Trying PubMed Central.") # Debug print
-                    pmc_pdf_content_retry, pmc_status_msg_retry = download_from_pmc(doi_to_retry, effective_title_for_retry, session)
-                    if pmc_pdf_content_retry:
-                        pdf_content_retry = pmc_pdf_content_retry
-                        retry_successful_this_doi = True
-                        successful_mirror_for_retry = "PubMed Central"
-                        overall_retry_status = pmc_status_msg_retry
-                        mirror_attempts_details_for_retry.append(("PubMed Central (Retry)", "OBTENIDO", pmc_status_msg_retry))
-                        temp_detailed_status_for_retry_log = f"Success_RETRY_PMC_{pmc_status_msg_retry}"
-                        temp_failure_reason_for_retry_log = "" # Clear overall failure
-                    else:
-                        mirror_attempts_details_for_retry.append(("PubMed Central (Retry)", "FALLO", pmc_status_msg_retry))
-                        temp_failure_reason_for_retry_log = pmc_status_msg_retry
-                        temp_detailed_status_for_retry_log = f"Failure_RETRY_PubMedCentral_{pmc_status_msg_retry}"
-
+                # If Sci-Hub and Google Scholar (Selenium) retries failed, try PubMed Central (Selenium method)
                 if not pdf_content_retry and driver: # Check if driver was initialized
-                    print(f"INFO: DOI {doi_to_retry} [RETRY] - PubMed Central (direct) failed. Attempting PubMed Central (Selenium method)...")
+                    print(f"INFO: DOI {doi_to_retry} [RETRY] - Attempting PubMed Central (Selenium method)...")
                     pmc_selenium_pdf_content_retry, pmc_selenium_status_msg_retry = download_with_selenium_pmc(driver, doi_to_retry, effective_title_for_retry)
                     if pmc_selenium_pdf_content_retry:
                         pdf_content_retry = pmc_selenium_pdf_content_retry

@@ -477,15 +477,43 @@ def download_with_selenium_google_scholar(driver, doi, title):
     scholar_url = f"https://scholar.google.com/scholar?hl=en&q={doi}"
     pdf_content = None
     status_message = f"FALLO - No PDF en Google Scholar (Selenium) ({scholar_url})"
+    scholar_page_loaded = False
+    initial_load_attempts = 0
+    max_initial_load_attempts = 2 # Try up to 2 times (1 initial + 1 retry)
+
+    while initial_load_attempts < max_initial_load_attempts and not scholar_page_loaded:
+        try:
+            driver.set_page_load_timeout(120)
+            print(f"SELENIUM GS: Attempt {initial_load_attempts + 1}/{max_initial_load_attempts} to load {scholar_url}")
+            driver.get(scholar_url)
+            WebDriverWait(driver, 25).until(
+                EC.presence_of_element_located((By.ID, "gs_res_ccl_mid"))
+            )
+            scholar_page_loaded = True
+            print(f"SELENIUM GS: Successfully loaded {scholar_url}")
+            break
+        except TimeoutException as e_load:
+            initial_load_attempts += 1
+            print(f"SELENIUM GS: Initial page load attempt {initial_load_attempts}/{max_initial_load_attempts} timed out for {scholar_url}.")
+            if initial_load_attempts < max_initial_load_attempts:
+                time.sleep(5)
+            else:
+                print(f"SELENIUM GS: All initial page load attempts timed out for {scholar_url}.")
+                # status_message is already set or will be set by the main try-except
+                return None, f"FALLO - Timeout persistente carga Google Scholar (Selenium) ({scholar_url})"
+        except Exception as e_gen_load:
+            initial_load_attempts += 1 # Count this as an attempt
+            print(f"SELENIUM GS: Unexpected error during initial page load attempt {initial_load_attempts}/{max_initial_load_attempts} for {scholar_url}: {e_gen_load}")
+            if initial_load_attempts < max_initial_load_attempts:
+                time.sleep(5)
+            else:
+                return None, f"FALLO - Error inesperado carga Google Scholar (Selenium) ({scholar_url}, {str(e_gen_load)[:100]})"
+
+    if not scholar_page_loaded:
+        # This specific status_message might be redundant if the loop's return is hit, but good for clarity
+        return None, f"FALLO - Timeout persistente carga Google Scholar (Selenium) ({scholar_url})"
 
     try:
-        driver.set_page_load_timeout(120) # Set to 120s
-        driver.get(scholar_url)
-        # Wait for the page to load and results to be present
-        WebDriverWait(driver, 25).until( # Further increased wait for initial results
-            EC.presence_of_element_located((By.ID, "gs_res_ccl_mid"))
-        )
-
         # Try to find links with "[PDF]" text first - these are often direct links
         pdf_links_elements = []
         try:
@@ -544,8 +572,13 @@ def download_with_selenium_google_scholar(driver, doi, title):
                         print(f"SELENIUM GS: Successfully fetched PDF via JS after navigation from {pdf_url_attempt} to {current_url_after_nav}")
                         return pdf_content, f"OBTENIDO (Google Scholar Selenium Nav & JS Fetch - {current_url_after_nav})"
                     else:
-                        print(f"SELENIUM GS: JS fetch from {current_url_after_nav} (after nav from {pdf_url_attempt}) did not yield PDF.")
-                        pdf_content = None
+                        if pdf_content is None: # JS fetch returned None (error or non-PDF type)
+                            print(f"SELENIUM GS: JS Fetch failed or returned non-PDF for {current_url_after_nav} (after nav from {pdf_url_attempt}). Will check for embeds.")
+                        elif pdf_content: # Got some content but it was too small
+                            print(f"SELENIUM GS: JS Fetched content from {current_url_after_nav} (after nav from {pdf_url_attempt}) was too small ({len(pdf_content)} bytes). Will check for embeds.")
+                        else: # Should be covered by pdf_content is None, but as a fallback log
+                            print(f"SELENIUM GS: JS fetch from {current_url_after_nav} (after nav from {pdf_url_attempt}) did not yield valid PDF. Will check for embeds.")
+                        pdf_content = None # Ensure it's None before embed check
 
                     # If still no PDF, look for an embed/iframe on the current page
                     if not pdf_content:
@@ -598,19 +631,17 @@ def download_with_selenium_google_scholar(driver, doi, title):
                 return pdf_content, status_message # Should not be reached if logic above is correct
 
         status_message = f"FALLO - No PDF obtained after trying all potential links (Selenium GS)"
-    except TimeoutException as e:
-        if driver.current_url == scholar_url or "scholar.google.com/scholar?hl=en&q=" in driver.current_url or driver.current_url == "about:blank":
-            print(f"SELENIUM GS: Page load TimeoutException for initial search {scholar_url}: {e}")
-            status_message = f"FALLO - Timeout carga página Google Scholar (Selenium) ({scholar_url})"
-        else:
-            print(f"SELENIUM GS: Element TimeoutException en Google Scholar (Selenium) para {doi}: {e}")
-            status_message = f"FALLO - Timeout localizando elemento en Google Scholar (Selenium) ({driver.current_url})"
-    except NoSuchElementException as e:
-        print(f"SELENIUM GS: NoSuchElementException en Google Scholar (Selenium) para {doi}: {e}")
-        status_message = f"FALLO - Elemento no encontrado en Google Scholar (Selenium) ({driver.current_url})"
-    except Exception as e:
-        print(f"SELENIUM GS: An unexpected error occurred with Selenium for DOI {doi} at {driver.current_url if driver else scholar_url}: {e}")
-        status_message = f"FALLO - Error inesperado en Google Scholar (Selenium) ({driver.current_url if driver else scholar_url}, {str(e)[:100]})"
+    # The initial load exception handling is now within the while loop.
+    # This outer try-except handles exceptions from link finding and processing.
+    except TimeoutException as e_element_find:
+        print(f"SELENIUM GS: Element TimeoutException after page load, while finding links for {doi} on {driver.current_url if driver else scholar_url}: {e_element_find}")
+        status_message = f"FALLO - Timeout localizando elementos post-carga en Google Scholar (Selenium) ({driver.current_url if driver else scholar_url})"
+    except NoSuchElementException as e_no_such:
+        print(f"SELENIUM GS: NoSuchElementException after page load, while finding links for {doi} on {driver.current_url if driver else scholar_url}: {e_no_such}")
+        status_message = f"FALLO - Elemento no encontrado post-carga en Google Scholar (Selenium) ({driver.current_url if driver else scholar_url})"
+    except Exception as e_general:
+        print(f"SELENIUM GS: An unexpected error occurred after page load for DOI {doi} at {driver.current_url if driver else scholar_url}: {e_general}")
+        status_message = f"FALLO - Error inesperado post-carga Google Scholar (Selenium) ({driver.current_url if driver else scholar_url}, {str(e_general)[:100]})"
 
     return None, status_message
 

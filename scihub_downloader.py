@@ -1648,7 +1648,18 @@ def download_pdfs_from_file():
             else: print("Generación de reporte Excel omitida por usuario.")
 
         elif zip_creation_or_main_loop_error: print("Proceso interrumpido por error crítico inicial. No se generará resumen ni Excel.")
-    
+
+        print("\n" + "="*50)
+        print("--- Archivos Generados ---")
+        if zip_path: # Ensure zip_path is not empty (though it should be if process reached here)
+            print(f"Archivo ZIP de PDFs guardado en:")
+            print(f"file:///{os.path.abspath(zip_path)}")
+
+        if excel_report_path_to_use:
+            print(f"\nReporte Excel guardado en:")
+            print(f"file:///{os.path.abspath(excel_report_path_to_use)}")
+        print("="*50 + "\n")
+
     finally: 
         # WebDriver will be quit here
         if driver:

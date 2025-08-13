@@ -64,11 +64,20 @@ class ConfigurationGUI:
 
         self.inter_doi_delay = tk.StringVar(value=str(INTER_DOI_DELAY_SECONDS))
         self.mirror_switch_delay = tk.StringVar(value=str(MIRROR_SWITCH_DELAY_SECONDS))
+        self.network_timeout = tk.StringVar(value="30")
+        self.selenium_pause = tk.StringVar(value="5")
 
-        tk.Label(delays_frame, text="Retraso entre DOIs:").pack(side=tk.LEFT, padx=5)
-        tk.Entry(delays_frame, textvariable=self.inter_doi_delay, width=5).pack(side=tk.LEFT)
-        tk.Label(delays_frame, text="Retraso al cambiar de mirror:").pack(side=tk.LEFT, padx=(20, 5))
-        tk.Entry(delays_frame, textvariable=self.mirror_switch_delay, width=5).pack(side=tk.LEFT)
+        tk.Label(delays_frame, text="Retraso entre DOIs:").grid(row=0, column=0, sticky=tk.W)
+        tk.Entry(delays_frame, textvariable=self.inter_doi_delay, width=5).grid(row=0, column=1, sticky=tk.W, padx=5)
+
+        tk.Label(delays_frame, text="Retraso al cambiar de mirror:").grid(row=0, column=2, sticky=tk.W, padx=(10,0))
+        tk.Entry(delays_frame, textvariable=self.mirror_switch_delay, width=5).grid(row=0, column=3, sticky=tk.W, padx=5)
+
+        tk.Label(delays_frame, text="Timeout de Red (s):").grid(row=1, column=0, sticky=tk.W, pady=(5,0))
+        tk.Entry(delays_frame, textvariable=self.network_timeout, width=5).grid(row=1, column=1, sticky=tk.W, padx=5, pady=(5,0))
+
+        tk.Label(delays_frame, text="Pausa Selenium (s):").grid(row=1, column=2, sticky=tk.W, padx=(10,0), pady=(5,0))
+        tk.Entry(delays_frame, textvariable=self.selenium_pause, width=5).grid(row=1, column=3, sticky=tk.W, padx=5, pady=(5,0))
 
         mirrors_frame = tk.LabelFrame(self.config_frame, text="Mirrors de Sci-Hub (separados por coma)", padx=10, pady=10)
         mirrors_frame.grid(row=4, column=0, sticky="nsew", pady=5)
@@ -171,6 +180,7 @@ class ConfigurationGUI:
         self.source_stats_labels = {}
 
     def process_queue(self):
+        self.master.config(cursor="") # Force default cursor
         try:
             message = self.progress_queue.get_nowait()
 
@@ -232,9 +242,6 @@ class ConfigurationGUI:
                     else:
                         self.source_stats_labels[source].config(text=text)
 
-            elif message['type'] == 'set_cursor':
-                self.master.config(cursor=message['value'])
-
             elif message['type'] == 'error':
                 self.is_processing = False
                 self.final_status_label_var.set(f"ERROR: {message['message']}")
@@ -281,10 +288,12 @@ class ConfigurationGUI:
         try:
             inter_doi = int(self.inter_doi_delay.get())
             mirror_switch = int(self.mirror_switch_delay.get())
-            if inter_doi < 0 or mirror_switch < 0:
+            network_timeout_val = int(self.network_timeout.get())
+            selenium_pause_val = int(self.selenium_pause.get())
+            if inter_doi < 0 or mirror_switch < 0 or network_timeout_val < 0 or selenium_pause_val < 0:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Error", "Los valores de retraso deben ser números enteros no negativos.")
+            messagebox.showerror("Error", "Los valores de tiempo deben ser números enteros no negativos.")
             return
 
         mirrors = [m.strip() for m in self.mirrors_text.get("1.0", tk.END).split(',') if m.strip()]
@@ -301,6 +310,8 @@ class ConfigurationGUI:
             "user_defined_mirrors": mirrors,
             "use_gs_selenium": self.use_gs_selenium.get(),
             "use_pmc_selenium": self.use_pmc_selenium.get(),
+            "network_timeout": network_timeout_val,
+            "selenium_pause": selenium_pause_val,
         }
         self.cancel_event.clear() # Reset event in case of re-run
 
@@ -406,8 +417,8 @@ def get_pdf_content_via_js(driver, pdf_url):
         });
     """
     try:
-        # Increased async script timeout
-        driver.set_script_timeout(90) # seconds for the async script to complete
+        # Increased async script timeout, now reduced as per user request
+        driver.set_script_timeout(20) # seconds for the async script to complete
         result = driver.execute_async_script(script, pdf_url)
         if isinstance(result, dict) and 'error' in result:
             # print(f"JS Fetch Helper: Error reported from JS for {pdf_url}: {result['error']}") # Reduced noise
@@ -489,9 +500,9 @@ def format_and_log_article_status(original_row_data, doi, title, current_article
 def clean_filename(title):
     return re.sub(r'[\\/*?:"<>|]', '_', title)
 
-def extract_pdf_link_from_html(article_page_url, session):
+def extract_pdf_link_from_html(article_page_url, session, timeout):
     try:
-        response = session.get(article_page_url, timeout=30); response.raise_for_status()
+        response = session.get(article_page_url, timeout=timeout); response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
         iframe = soup.find('iframe', id='pdf')
         if iframe and iframe.get('src'):
@@ -509,11 +520,11 @@ def extract_pdf_link_from_html(article_page_url, session):
     except Exception:
         return None
 
-def download_from_google_scholar_old(doi, title, session):
+def download_from_google_scholar_old(doi, title, session, network_timeout):
     scholar_url = f"https://scholar.google.com/scholar?q={doi}"
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-        response = session.get(scholar_url, headers=headers, timeout=30)
+        response = session.get(scholar_url, headers=headers, timeout=network_timeout)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
         potential_links = []
@@ -533,11 +544,11 @@ def download_from_google_scholar_old(doi, title, session):
                 unique_potential_links.append(plink)
         for pdf_url in unique_potential_links:
             try:
-                head_response = session.head(pdf_url, headers=headers, timeout=20, allow_redirects=True)
+                head_response = session.head(pdf_url, headers=headers, timeout=network_timeout, allow_redirects=True)
                 head_response.raise_for_status()
                 content_type = head_response.headers.get('Content-Type', '').lower()
                 if 'application/pdf' in content_type:
-                    pdf_response = session.get(pdf_url, headers=headers, timeout=60, stream=True)
+                    pdf_response = session.get(pdf_url, headers=headers, timeout=network_timeout*2, stream=True)
                     pdf_response.raise_for_status()
                     get_content_type = pdf_response.headers.get('Content-Type', '').lower()
                     if 'application/pdf' in get_content_type:
@@ -559,7 +570,7 @@ def download_from_google_scholar_old(doi, title, session):
     except Exception:
         return None, f"FALLO - Error inesperado Google Scholar ({scholar_url})"
 
-def download_from_google_scholar(doi, title, session):
+def download_from_google_scholar(doi, title, session, network_timeout):
     scholar_url = f"https://scholar.google.com/scholar?hl=en&q={doi}"
     try:
         headers = {
@@ -569,7 +580,7 @@ def download_from_google_scholar(doi, title, session):
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
             'Connection': 'keep-alive'
         }
-        response = session.get(scholar_url, headers=headers, timeout=30)
+        response = session.get(scholar_url, headers=headers, timeout=network_timeout)
         response.raise_for_status()
         content_type_initial = response.headers.get('Content-Type', '').lower()
         if 'application/pdf' in content_type_initial:
@@ -614,11 +625,11 @@ def download_from_google_scholar(doi, title, session):
                 unique_potential_links.append(plink)
         for pdf_url in unique_potential_links:
             try:
-                head_response = session.head(pdf_url, headers=headers, timeout=20, allow_redirects=True)
+                head_response = session.head(pdf_url, headers=headers, timeout=network_timeout, allow_redirects=True)
                 head_response.raise_for_status()
                 content_type = head_response.headers.get('Content-Type', '').lower()
                 if 'application/pdf' in content_type:
-                    pdf_response = session.get(pdf_url, headers=headers, timeout=60, stream=True)
+                    pdf_response = session.get(pdf_url, headers=headers, timeout=network_timeout*2, stream=True)
                     pdf_response.raise_for_status()
                     get_content_type = pdf_response.headers.get('Content-Type', '').lower()
                     if 'application/pdf' in get_content_type:
@@ -629,7 +640,7 @@ def download_from_google_scholar(doi, title, session):
                         source_domain = domain_match.group(1) if domain_match else "Unknown Domain"
                         return pdf_content, f"OBTENIDO (Google Scholar via {source_domain})"
                 else:
-                    pdf_response = session.get(pdf_url, headers=headers, timeout=60, stream=True)
+                    pdf_response = session.get(pdf_url, headers=headers, timeout=network_timeout*2, stream=True)
                     pdf_response.raise_for_status()
                     get_content_type = pdf_response.headers.get('Content-Type', '').lower()
                     if 'application/pdf' in get_content_type:
@@ -653,7 +664,7 @@ def download_from_google_scholar(doi, title, session):
     except Exception:
         return None, f"FALLO - Error inesperado Google Scholar ({scholar_url})"
 
-def download_with_selenium_google_scholar(driver, doi, title):
+def download_with_selenium_google_scholar(driver, doi, title, selenium_pause):
     # print(f"SELENIUM GS: Searching Google Scholar for DOI: {doi} (Title: {title if title else 'N/A'})") # Reduced noise
     scholar_url = f"https://scholar.google.com/scholar?hl=en&q={doi}"
     pdf_content = None
@@ -676,7 +687,7 @@ def download_with_selenium_google_scholar(driver, doi, title):
             initial_load_attempts += 1
             # print(f"SELENIUM GS: Initial page load attempt {initial_load_attempts}/{max_initial_load_attempts} timed out for {scholar_url}.") # Reduced noise
             if initial_load_attempts < max_initial_load_attempts:
-                time.sleep(5)
+                time.sleep(selenium_pause)
             else:
                 # print(f"SELENIUM GS: All initial page load attempts timed out for {scholar_url}.") # Reduced noise
                 return None, f"FALLO - Timeout persistente carga Google Scholar (Selenium) ({scholar_url})"
@@ -684,7 +695,7 @@ def download_with_selenium_google_scholar(driver, doi, title):
             initial_load_attempts += 1
             # print(f"SELENIUM GS: Unexpected error during initial page load attempt {initial_load_attempts}/{max_initial_load_attempts} for {scholar_url}: {e_gen_load}") # Reduced noise
             if initial_load_attempts < max_initial_load_attempts:
-                time.sleep(5)
+                time.sleep(selenium_pause)
             else:
                 return None, f"FALLO - Error inesperado carga Google Scholar (Selenium) ({scholar_url}, {str(e_gen_load)[:100]})"
     if not scholar_page_loaded:
@@ -728,7 +739,7 @@ def download_with_selenium_google_scholar(driver, doi, title):
                 # print(f"SELENIUM GS: Attempting navigation to: {pdf_url_attempt}") # Reduced noise
                 try:
                     driver.get(pdf_url_attempt)
-                    time.sleep(5)
+                    time.sleep(selenium_pause)
                     current_url_after_nav = driver.current_url
                     # print(f"SELENIUM GS: Navigated. Current URL: {current_url_after_nav}") # Reduced noise
                     pdf_content = get_pdf_content_via_js(driver, current_url_after_nav)
@@ -802,7 +813,7 @@ def download_with_selenium_google_scholar(driver, doi, title):
         status_message = f"FALLO - Error inesperado post-carga en Google Scholar (Selenium) ({driver.current_url if driver else scholar_url}, {str(e_general)[:100]})"
     return None, status_message
 
-def download_with_selenium_pmc(driver, doi, title):
+def download_with_selenium_pmc(driver, doi, title, selenium_pause):
     # print(f"SELENIUM PMC: Searching PubMed Central for DOI: {doi} (Title: {title if title else 'N/A'})") # Reduced noise
     search_url = f"https://www.ncbi.nlm.nih.gov/pmc/?term={doi}"
     pdf_content = None
@@ -881,7 +892,7 @@ def download_with_selenium_pmc(driver, doi, title):
                 # print(f"SELENIUM PMC: Attempting navigation to: {pdf_url_attempt}") # Reduced noise
                 try:
                     driver.get(pdf_url_attempt)
-                    time.sleep(7)
+                    time.sleep(selenium_pause)
                     current_url_after_nav = driver.current_url
                     # print(f"SELENIUM PMC: Navigated. Current URL is now: {current_url_after_nav}") # Reduced noise
                     # print(f"SELENIUM PMC: Attempting JS fetch on current URL post-navigation: {current_url_after_nav}") # Reduced noise
@@ -1050,6 +1061,8 @@ def download_pdfs_from_file(config, queue, cancel_event):
         raw_mirrors_from_gui = config["user_defined_mirrors"]
         use_gs_selenium_flag = config.get("use_gs_selenium", True)
         use_pmc_selenium_flag = config.get("use_pmc_selenium", True)
+        network_timeout = config.get("network_timeout", 30)
+        selenium_pause = config.get("selenium_pause", 5)
 
         user_defined_mirrors = []
         for mirror_url in raw_mirrors_from_gui:
@@ -1169,17 +1182,16 @@ def download_pdfs_from_file(config, queue, cancel_event):
                     temp_detailed_status_for_log = ""
                     temp_failure_reason_for_log = ""
 
-                    queue.put({'type': 'set_cursor', 'value': 'watch'})
                     if user_defined_mirrors:
                         for mirror_idx, current_mirror_base_url in enumerate(mirrors_to_try_for_this_doi):
                             full_sci_hub_url_for_html_page = f"{current_mirror_base_url}{doi}"
                             mirror_status_str = "FALLO"
                             mirror_reason_str = ""
 
-                            actual_pdf_download_url = extract_pdf_link_from_html(full_sci_hub_url_for_html_page, session)
+                            actual_pdf_download_url = extract_pdf_link_from_html(full_sci_hub_url_for_html_page, session, network_timeout)
                             if actual_pdf_download_url:
                                 try:
-                                    response = session.get(actual_pdf_download_url, timeout=60)
+                                    response = session.get(actual_pdf_download_url, timeout=network_timeout*2) # Give more time for actual PDF download
                                     response.raise_for_status()
                                     content_type = response.headers.get('Content-Type', '').lower()
                                     if 'application/pdf' in content_type:
@@ -1205,7 +1217,7 @@ def download_pdfs_from_file(config, queue, cancel_event):
                             if not pdf_content:
                                 temp_failure_reason_for_log = mirror_reason_str
                                 try:
-                                    response = session.get(full_sci_hub_url_for_html_page, timeout=30)
+                                    response = session.get(full_sci_hub_url_for_html_page, timeout=network_timeout)
                                     response.raise_for_status()
                                     content_type = response.headers.get('Content-Type', '').lower()
                                     if 'application/pdf' in content_type:
@@ -1252,7 +1264,7 @@ def download_pdfs_from_file(config, queue, cancel_event):
 
                     if not pdf_content and driver and use_gs_selenium_flag:
                         # print(f"INFO: DOI {doi} - Attempting Google Scholar (Selenium method)...") # Reduced noise
-                        gs_selenium_pdf_content, gs_selenium_status_msg = download_with_selenium_google_scholar(driver, doi, effective_title)
+                        gs_selenium_pdf_content, gs_selenium_status_msg = download_with_selenium_google_scholar(driver, doi, effective_title, selenium_pause)
                         if gs_selenium_pdf_content:
                             pdf_content = gs_selenium_pdf_content
                             download_successful_this_doi = True
@@ -1268,7 +1280,7 @@ def download_pdfs_from_file(config, queue, cancel_event):
 
                     if not pdf_content and driver and use_pmc_selenium_flag:
                         # print(f"INFO: DOI {doi} - Attempting PubMed Central (Selenium method)...") # Reduced noise
-                        pmc_selenium_pdf_content, pmc_selenium_status_msg = download_with_selenium_pmc(driver, doi, effective_title)
+                        pmc_selenium_pdf_content, pmc_selenium_status_msg = download_with_selenium_pmc(driver, doi, effective_title, selenium_pause)
                         if pmc_selenium_pdf_content:
                             pdf_content = pmc_selenium_pdf_content
                             download_successful_this_doi = True
@@ -1311,7 +1323,6 @@ def download_pdfs_from_file(config, queue, cancel_event):
                         overall_doi_status = "FALTANTE"
                         failed_articles_data.append({**original_row_data, 'Failure_Reason': temp_failure_reason_for_log, 'Detailed_Status': temp_detailed_status_for_log, 'original_index': index})
 
-                    queue.put({'type': 'set_cursor', 'value': ''}) # Reset cursor
                     format_and_log_article_status(original_row_data, doi, effective_title, current_article_num_for_log, total_articles, successful_downloads, mirror_attempts_details_for_doi, overall_doi_status, user_inter_doi_delay, failed_articles_data_len=len(failed_articles_data))
 
                     log_entry_failure_reason = temp_failure_reason_for_log if not download_successful_this_doi else ""
@@ -1388,15 +1399,14 @@ def download_pdfs_from_file(config, queue, cancel_event):
             temp_detailed_status_for_retry_log = ""; temp_failure_reason_for_retry_log = ""
             retry_start_time_actual_attempt = datetime.now()
 
-            queue.put({'type': 'set_cursor', 'value': 'watch'})
             if user_defined_mirrors:
                 for mirror_idx_retry, current_mirror_base_url_retry in enumerate(mirrors_for_retry):
                     full_sci_hub_url_for_html_page_retry = f"{current_mirror_base_url_retry}{doi_to_retry}"
                     mirror_status_str_retry = "FALLO"; mirror_reason_str_retry = ""
-                    actual_pdf_download_url_retry = extract_pdf_link_from_html(full_sci_hub_url_for_html_page_retry, session)
+                    actual_pdf_download_url_retry = extract_pdf_link_from_html(full_sci_hub_url_for_html_page_retry, session, network_timeout)
                     if actual_pdf_download_url_retry:
                         try:
-                            response = session.get(actual_pdf_download_url_retry, timeout=60); response.raise_for_status()
+                            response = session.get(actual_pdf_download_url_retry, timeout=network_timeout*2); response.raise_for_status()
                             content_type = response.headers.get('Content-Type', '').lower()
                             if 'application/pdf' in content_type: pdf_content_retry = response.content; mirror_status_str_retry = "OBTENIDO (REINTENTO Extracción)"; temp_detailed_status_for_retry_log = f"Success_RETRY_iframe_embed_from_{current_mirror_base_url_retry}"
                             else: mirror_reason_str_retry = f"RETRY: Content-Type not PDF ({content_type})"; temp_detailed_status_for_retry_log = f"Failure_RETRY_iframe_embed_not_pdf_from_{current_mirror_base_url_retry}"
@@ -1407,7 +1417,7 @@ def download_pdfs_from_file(config, queue, cancel_event):
                     if not pdf_content_retry:
                         temp_failure_reason_for_retry_log = mirror_reason_str_retry
                         try:
-                            response = session.get(full_sci_hub_url_for_html_page_retry, timeout=30); response.raise_for_status()
+                            response = session.get(full_sci_hub_url_for_html_page_retry, timeout=network_timeout); response.raise_for_status()
                             content_type = response.headers.get('Content-Type', '').lower()
                             if 'application/pdf' in content_type:
                                 pdf_content_retry = response.content; mirror_status_str_retry = "OBTENIDO (REINTENTO Fallback Directo)"; mirror_reason_str_retry = ""; temp_detailed_status_for_retry_log = f"Success_RETRY_direct_DOI_from_{current_mirror_base_url_retry}"
@@ -1436,7 +1446,7 @@ def download_pdfs_from_file(config, queue, cancel_event):
                             time.sleep(user_mirror_switch_delay)
             if not pdf_content_retry and driver and use_gs_selenium_flag:
                 # print(f"INFO: DOI {doi_to_retry} [RETRY] - Attempting Google Scholar (Selenium method)...") # Reduced noise
-                gs_selenium_pdf_content_retry, gs_selenium_status_msg_retry = download_with_selenium_google_scholar(driver, doi_to_retry, effective_title_for_retry)
+                gs_selenium_pdf_content_retry, gs_selenium_status_msg_retry = download_with_selenium_google_scholar(driver, doi_to_retry, effective_title_for_retry, selenium_pause)
                 if gs_selenium_pdf_content_retry:
                     pdf_content_retry = gs_selenium_pdf_content_retry
                     retry_successful_this_doi = True
@@ -1451,7 +1461,7 @@ def download_pdfs_from_file(config, queue, cancel_event):
                     temp_detailed_status_for_retry_log = f"Failure_RETRY_GoogleScholar_Selenium_{gs_selenium_status_msg_retry}"
             if not pdf_content_retry and driver and use_pmc_selenium_flag:
                 # print(f"INFO: DOI {doi_to_retry} [RETRY] - Attempting PubMed Central (Selenium method)...") # Reduced noise
-                pmc_selenium_pdf_content_retry, pmc_selenium_status_msg_retry = download_with_selenium_pmc(driver, doi_to_retry, effective_title_for_retry)
+                pmc_selenium_pdf_content_retry, pmc_selenium_status_msg_retry = download_with_selenium_pmc(driver, doi_to_retry, effective_title_for_retry, selenium_pause)
                 if pmc_selenium_pdf_content_retry:
                     pdf_content_retry = pmc_selenium_pdf_content_retry
                     retry_successful_this_doi = True
@@ -1514,7 +1524,6 @@ def download_pdfs_from_file(config, queue, cancel_event):
                         item['Detailed_Status'] = temp_detailed_status_for_retry_log
                         break
 
-            queue.put({'type': 'set_cursor', 'value': ''}) # Reset cursor
             format_and_log_article_status(failed_article_entry, doi_to_retry, effective_title_for_retry, current_article_num_for_log_retry, total_articles, successful_downloads, mirror_attempts_details_for_retry, overall_retry_status, user_inter_doi_delay, is_retry=True, failed_articles_data_len=len(temp_failed_articles_data_for_iteration) - retry_idx)
 
             # Update the Excel report after the retry attempt

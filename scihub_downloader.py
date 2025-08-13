@@ -7,10 +7,10 @@ class ConfigurationGUI:
     def __init__(self, master):
         self.master = master
         master.title("Configuración de Sci-Hub Downloader")
-        master.geometry("600x450")
+        master.geometry("600x550") # Increased height for scrollbar visibility
 
         self.config = {}
-        self.cancelled = True
+        self.cancel_event = threading.Event()
         self.total_articles = 0
 
         # Frame principal
@@ -66,44 +66,75 @@ class ConfigurationGUI:
         self.cancel_button = tk.Button(buttons_frame, text="Cancelar", command=self.cancel_process)
         self.cancel_button.pack(side=tk.RIGHT)
 
-        # --- Frame de Progreso (inicialmente oculto) ---
-        self.progress_frame = tk.Frame(main_frame)
+        # --- Frame de Progreso (Scrollable, inicialmente oculto) ---
+        self.progress_view_container = tk.Frame(main_frame)
 
-        tk.Label(self.progress_frame, text="Progreso Total (Artículos Buscados):", font="-weight bold").grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
-        self.pbar_searched = ttk.Progressbar(self.progress_frame, length=300)
+        canvas = tk.Canvas(self.progress_view_container)
+        scrollbar = tk.Scrollbar(self.progress_view_container, orient="vertical", command=canvas.yview)
+        self.scrollable_progress_frame = tk.Frame(canvas)
+
+        self.scrollable_progress_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(
+                scrollregion=canvas.bbox("all")
+            )
+        )
+
+        canvas.create_window((0, 0), window=self.scrollable_progress_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # --- Contenido del Frame de Progreso ---
+        progress_content_frame = self.scrollable_progress_frame
+
+        tk.Label(progress_content_frame, text="Progreso Total (Artículos Buscados):", font="-weight bold").grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
+        self.pbar_searched = ttk.Progressbar(progress_content_frame, length=300)
         self.pbar_searched.grid(row=1, column=0, sticky=tk.EW, padx=5, pady=(0, 10))
         self.pbar_searched_label_var = tk.StringVar(value="0/0 (0.00%)")
-        tk.Label(self.progress_frame, textvariable=self.pbar_searched_label_var).grid(row=1, column=1, sticky=tk.W, padx=5)
+        tk.Label(progress_content_frame, textvariable=self.pbar_searched_label_var).grid(row=1, column=1, sticky=tk.W, padx=5)
 
-        tk.Label(self.progress_frame, text="Éxito (Encontrados de Buscados):", font="-weight bold").grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
-        self.pbar_found_of_searched = ttk.Progressbar(self.progress_frame, length=300)
+        tk.Label(progress_content_frame, text="Éxito (Encontrados de Buscados):", font="-weight bold").grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
+        self.pbar_found_of_searched = ttk.Progressbar(progress_content_frame, length=300)
         self.pbar_found_of_searched.grid(row=3, column=0, sticky=tk.EW, padx=5, pady=(0, 10))
         self.pbar_found_of_searched_label_var = tk.StringVar(value="0/0 (0.00%)")
-        tk.Label(self.progress_frame, textvariable=self.pbar_found_of_searched_label_var).grid(row=3, column=1, sticky=tk.W, padx=5)
+        tk.Label(progress_content_frame, textvariable=self.pbar_found_of_searched_label_var).grid(row=3, column=1, sticky=tk.W, padx=5)
 
-        tk.Label(self.progress_frame, text="Éxito (Encontrados del Total):", font="-weight bold").grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
-        self.pbar_found_of_total = ttk.Progressbar(self.progress_frame, length=300)
+        tk.Label(progress_content_frame, text="Éxito (Encontrados del Total):", font="-weight bold").grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
+        self.pbar_found_of_total = ttk.Progressbar(progress_content_frame, length=300)
         self.pbar_found_of_total.grid(row=5, column=0, sticky=tk.EW, padx=5, pady=(0, 10))
         self.pbar_found_of_total_label_var = tk.StringVar(value="0/0 (0.00%)")
-        tk.Label(self.progress_frame, textvariable=self.pbar_found_of_total_label_var).grid(row=5, column=1, sticky=tk.W, padx=5)
+        tk.Label(progress_content_frame, textvariable=self.pbar_found_of_total_label_var).grid(row=5, column=1, sticky=tk.W, padx=5)
 
-        tk.Label(self.progress_frame, text="Tiempo Estimado Restante:", font="-weight bold").grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=(10,0))
+        time_stats_frame = tk.Frame(progress_content_frame)
+        time_stats_frame.grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=(10,0))
+
+        tk.Label(time_stats_frame, text="Tiempo Transcurrido:", font="-weight bold").grid(row=0, column=0, sticky=tk.W)
+        self.elapsed_time_var = tk.StringVar(value="0s")
+        tk.Label(time_stats_frame, textvariable=self.elapsed_time_var).grid(row=0, column=1, sticky=tk.W, padx=5)
+
+        tk.Label(time_stats_frame, text="Tiempo Promedio/Artículo:", font="-weight bold").grid(row=1, column=0, sticky=tk.W)
+        self.avg_time_var = tk.StringVar(value="0s")
+        tk.Label(time_stats_frame, textvariable=self.avg_time_var).grid(row=1, column=1, sticky=tk.W, padx=5)
+
+        tk.Label(time_stats_frame, text="Tiempo Estimado Restante:", font="-weight bold").grid(row=2, column=0, sticky=tk.W)
         self.eta_label_var = tk.StringVar(value="Calculando...")
-        tk.Label(self.progress_frame, textvariable=self.eta_label_var).grid(row=7, column=0, columnspan=2, sticky=tk.W, padx=5)
+        tk.Label(time_stats_frame, textvariable=self.eta_label_var).grid(row=2, column=1, sticky=tk.W, padx=5)
 
-        self.current_article_frame = tk.LabelFrame(self.progress_frame, text="Procesando Artículo", padx=10, pady=10)
-        self.current_article_frame.grid(row=8, column=0, columnspan=2, sticky="ew", pady=10)
+        self.current_article_frame = tk.LabelFrame(progress_content_frame, text="Procesando Artículo", padx=10, pady=10)
+        self.current_article_frame.grid(row=7, column=0, columnspan=2, sticky="ew", pady=10)
         self.current_article_label_var = tk.StringVar(value="Iniciando...")
         tk.Label(self.current_article_frame, textvariable=self.current_article_label_var, justify=tk.LEFT).pack(anchor=tk.W)
 
         self.final_status_label_var = tk.StringVar(value="Proceso en ejecución...")
-        tk.Label(self.progress_frame, textvariable=self.final_status_label_var, pady=20, font="-weight bold").grid(row=9, column=0, columnspan=2, sticky=tk.W)
+        tk.Label(progress_content_frame, textvariable=self.final_status_label_var, pady=20, font="-weight bold").grid(row=8, column=0, columnspan=2, sticky=tk.W)
 
-        self.source_stats_frame = tk.LabelFrame(self.progress_frame, text="Estadísticas de Origen", padx=10, pady=10)
-        self.source_stats_frame.grid(row=10, column=0, columnspan=2, sticky="ew", pady=10)
+        self.source_stats_frame = tk.LabelFrame(progress_content_frame, text="Estadísticas de Origen", padx=10, pady=10)
+        self.source_stats_frame.grid(row=9, column=0, columnspan=2, sticky="ew", pady=10)
         self.source_stats_labels = {}
 
-        self.progress_frame.columnconfigure(0, weight=1)
+        progress_content_frame.columnconfigure(0, weight=1)
 
 
     def process_queue(self):
@@ -146,7 +177,9 @@ class ConfigurationGUI:
                 self.current_article_label_var.set(message['value'])
 
             elif message['type'] == 'time_update':
-                self.eta_label_var.set(message['value'])
+                self.eta_label_var.set(message['value']['eta'])
+                self.elapsed_time_var.set(message['value']['elapsed'])
+                self.avg_time_var.set(message['value']['avg'])
 
             elif message['type'] == 'source_stat':
                 stats = message['stats']
@@ -218,11 +251,11 @@ class ConfigurationGUI:
             "user_mirror_switch_delay": mirror_switch,
             "user_defined_mirrors": mirrors,
         }
-        self.cancelled = False
+        self.cancel_event.clear() # Reset event in case of re-run
 
         # Switch to the progress view
         self.config_frame.pack_forget()
-        self.progress_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.progress_view_container.pack(fill=tk.BOTH, expand=True)
 
         # Create queue for thread communication
         self.progress_queue = Queue()
@@ -230,7 +263,7 @@ class ConfigurationGUI:
         # Start worker thread
         self.worker_thread = threading.Thread(
             target=download_pdfs_from_file,
-            args=(self.config, self.progress_queue)
+            args=(self.config, self.progress_queue, self.cancel_event)
         )
         self.worker_thread.start()
 
@@ -238,7 +271,10 @@ class ConfigurationGUI:
         self.master.after(100, self.process_queue)
 
     def cancel_process(self):
-        self.cancelled = True
+        if self.worker_thread and self.worker_thread.is_alive():
+            self.cancel_event.set()
+            # Give the thread a moment to shut down
+            self.worker_thread.join(timeout=2)
         self.master.destroy()
 
 
@@ -1070,7 +1106,7 @@ def write_excel_report(excel_path, successful_data, failed_data, all_logs, origi
             queue.put({'type': 'error', 'message': f"Error guardando Excel: {e}"})
 
 
-def download_pdfs_from_file(config, queue):
+def download_pdfs_from_file(config, queue, cancel_event):
     driver = None
     original_stdout = sys.stdout
     temp_pdf_paths = []
@@ -1167,16 +1203,28 @@ def download_pdfs_from_file(config, queue):
         try:
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
                 for index, row in df.iterrows():
+                    if cancel_event.is_set():
+                        print("Proceso cancelado por el usuario.")
+                        break
                     original_row_data = row.to_dict()
                     start_time = datetime.now()
                     doi = str(original_row_data.get('DOI', original_row_data.get('doi', ''))).strip()
                     title = str(original_row_data.get('Title', original_row_data.get('title', ''))).strip()
-
-                    article_display_text = f"Título: {title}\nDOI: {doi}"
-                    queue.put({'type': 'current_article', 'value': article_display_text})
                     effective_title = title if title else doi
 
                     current_article_num_for_log = index + 1
+
+                    # --- Create Detailed Article String for GUI ---
+                    article_progress_str = f"Artículo: {current_article_num_for_log}/{total_articles} ({(current_article_num_for_log/total_articles)*100:.2f}%)"
+                    title_str = f"Título: {title if title else 'N/A'}"
+                    author_str = f"First Author: {original_row_data.get('First Author', 'N/A')}"
+                    journal_str = f"Journal/Book: {original_row_data.get('Journal/Book', 'N/A')}"
+                    year_str = f"Publication Year: {original_row_data.get('Publication Year', 'N/A')}"
+                    doi_str = f"DOI: {doi}"
+
+                    # Single line format as requested
+                    article_display_text = f"{article_progress_str} {title_str} {author_str} {journal_str} {year_str} {doi_str}"
+                    queue.put({'type': 'current_article', 'value': article_display_text})
                     mirror_attempts_details_for_doi = []
                     overall_doi_status = "FALTANTE"
 
@@ -1349,27 +1397,33 @@ def download_pdfs_from_file(config, queue):
 
                     queue.put({'type': 'progress', 'searched': index + 1, 'found': successful_downloads})
 
-                    # --- ETA Calculation ---
+                    # --- Time Statistics Calculation & Update ---
                     articles_processed = index + 1
-                    elapsed_time = time.time() - process_start_time
+                    elapsed_time_seconds = time.time() - process_start_time
                     if articles_processed > 0:
-                        avg_time_per_article = elapsed_time / articles_processed
+                        avg_time_per_article_seconds = elapsed_time_seconds / articles_processed
                         articles_remaining = total_articles - articles_processed
-                        estimated_remaining_time = articles_remaining * avg_time_per_article
+                        estimated_remaining_time_seconds = articles_remaining * avg_time_per_article_seconds
 
-                        if estimated_remaining_time > 0:
-                            mins, secs = divmod(estimated_remaining_time, 60)
+                        def format_time(seconds):
+                            mins, secs = divmod(seconds, 60)
                             hours, mins = divmod(mins, 60)
-                            eta_string = ""
                             if hours > 0:
-                                eta_string += f"{int(hours)}h "
-                            if mins > 0 or hours > 0:
-                                eta_string += f"{int(mins)}m "
-                            eta_string += f"{int(secs)}s"
-                        else:
-                            eta_string = "Completado"
+                                return f"{int(hours)}h {int(mins)}m {int(secs)}s"
+                            if mins > 0:
+                                return f"{int(mins)}m {int(secs)}s"
+                            return f"{int(secs)}s"
 
-                        queue.put({'type': 'time_update', 'value': eta_string})
+                        eta_string = format_time(estimated_remaining_time_seconds) if estimated_remaining_time_seconds > 0 else "Completado"
+                        elapsed_string = format_time(elapsed_time_seconds)
+                        avg_string = f"{avg_time_per_article_seconds:.2f}s"
+
+                        time_update_payload = {
+                            'eta': eta_string,
+                            'elapsed': elapsed_string,
+                            'avg': avg_string
+                        }
+                        queue.put({'type': 'time_update', 'value': time_update_payload})
 
                     print_to_console("===============================================================================================", original_stdout)
 
@@ -1397,6 +1451,9 @@ def download_pdfs_from_file(config, queue):
         temp_failed_articles_data_for_iteration = list(failed_articles_data)
         mirrors_for_retry = list(user_defined_mirrors)
         for retry_idx, failed_article_entry in enumerate(temp_failed_articles_data_for_iteration):
+            if cancel_event.is_set():
+                print("Proceso cancelado por el usuario durante la fase de reintento.")
+                break
             original_index_for_retry = failed_article_entry.get('original_index', -1)
             current_article_num_for_log_retry = original_index_for_retry + 1 if original_index_for_retry != -1 else retry_idx + 1
             doi_to_retry = str(failed_article_entry.get('DOI', failed_article_entry.get('doi', ''))).strip()

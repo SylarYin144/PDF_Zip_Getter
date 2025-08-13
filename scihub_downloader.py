@@ -87,8 +87,21 @@ class ConfigurationGUI:
         self.pbar_found_of_total_label_var = tk.StringVar(value="0/0 (0.00%)")
         tk.Label(self.progress_frame, textvariable=self.pbar_found_of_total_label_var).grid(row=5, column=1, sticky=tk.W, padx=5)
 
+        tk.Label(self.progress_frame, text="Tiempo Estimado Restante:", font="-weight bold").grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=(10,0))
+        self.eta_label_var = tk.StringVar(value="Calculando...")
+        tk.Label(self.progress_frame, textvariable=self.eta_label_var).grid(row=7, column=0, columnspan=2, sticky=tk.W, padx=5)
+
+        self.current_article_frame = tk.LabelFrame(self.progress_frame, text="Procesando Artículo", padx=10, pady=10)
+        self.current_article_frame.grid(row=8, column=0, columnspan=2, sticky="ew", pady=10)
+        self.current_article_label_var = tk.StringVar(value="Iniciando...")
+        tk.Label(self.current_article_frame, textvariable=self.current_article_label_var, justify=tk.LEFT).pack(anchor=tk.W)
+
         self.final_status_label_var = tk.StringVar(value="Proceso en ejecución...")
-        tk.Label(self.progress_frame, textvariable=self.final_status_label_var, pady=20, font="-weight bold").grid(row=6, column=0, columnspan=2, sticky=tk.W)
+        tk.Label(self.progress_frame, textvariable=self.final_status_label_var, pady=20, font="-weight bold").grid(row=9, column=0, columnspan=2, sticky=tk.W)
+
+        self.source_stats_frame = tk.LabelFrame(self.progress_frame, text="Estadísticas de Origen", padx=10, pady=10)
+        self.source_stats_frame.grid(row=10, column=0, columnspan=2, sticky="ew", pady=10)
+        self.source_stats_labels = {}
 
         self.progress_frame.columnconfigure(0, weight=1)
 
@@ -128,6 +141,26 @@ class ConfigurationGUI:
                 self.final_status_label_var.set(message['message'])
                 self.cancel_button.config(text="Cerrar", state=tk.NORMAL)
                 return # Stop polling
+
+            elif message['type'] == 'current_article':
+                self.current_article_label_var.set(message['value'])
+
+            elif message['type'] == 'time_update':
+                self.eta_label_var.set(message['value'])
+
+            elif message['type'] == 'source_stat':
+                stats = message['stats']
+                total_found = sum(stats.values())
+
+                for source, count in stats.items():
+                    percentage = (count / total_found) * 100 if total_found > 0 else 0
+                    text = f"{source}: {count} ({percentage:.2f}%)"
+
+                    if source not in self.source_stats_labels:
+                        self.source_stats_labels[source] = tk.Label(self.source_stats_frame, text=text)
+                        self.source_stats_labels[source].pack(anchor=tk.W)
+                    else:
+                        self.source_stats_labels[source].config(text=text)
 
             elif message['type'] == 'error':
                 self.final_status_label_var.set(f"ERROR: {message['message']}")
@@ -217,6 +250,7 @@ import os
 import re 
 import time
 import sys 
+import os
 from datetime import datetime
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
@@ -287,14 +321,14 @@ def get_pdf_content_via_js(driver, pdf_url):
         driver.set_script_timeout(90) # seconds for the async script to complete
         result = driver.execute_async_script(script, pdf_url)
         if isinstance(result, dict) and 'error' in result:
-            print(f"JS Fetch Helper: Error reported from JS for {pdf_url}: {result['error']}")
+            # print(f"JS Fetch Helper: Error reported from JS for {pdf_url}: {result['error']}") # Reduced noise
             return None
         if result:
             return base64.b64decode(result)
-        print(f"JS Fetch Helper: No result or empty result from JS for {pdf_url}")
+        # print(f"JS Fetch Helper: No result or empty result from JS for {pdf_url}") # Reduced noise
         return None
     except Exception as e:
-        print(f"JS Fetch Helper: Exception during execute_async_script for {pdf_url}: {e}")
+        # print(f"JS Fetch Helper: Exception during execute_async_script for {pdf_url}: {e}") # Reduced noise
         return None
 
 def format_and_log_article_status(original_row_data, doi, title, current_article_num, total_articles, 
@@ -437,7 +471,6 @@ def download_from_google_scholar_old(doi, title, session):
         return None, f"FALLO - Error inesperado Google Scholar ({scholar_url})"
 
 def download_from_google_scholar(doi, title, session):
-    print(f"FIXED: Searching Google Scholar for DOI: {doi} (Title: {title if title else 'N/A'})")
     scholar_url = f"https://scholar.google.com/scholar?hl=en&q={doi}"
     try:
         headers = {
@@ -451,11 +484,8 @@ def download_from_google_scholar(doi, title, session):
         response.raise_for_status()
         content_type_initial = response.headers.get('Content-Type', '').lower()
         if 'application/pdf' in content_type_initial:
-            print(f"FIXED: Initial response from {scholar_url} is a PDF. Content-Type: {content_type_initial}.")
             if len(response.content) > 1000:
                  return response.content, f"OBTENIDO (Google Scholar Direct Response - {scholar_url})"
-            else:
-                print(f"FIXED: Initial response was PDF, but content too small. Suspicious. Proceeding to parse.")
         soup = BeautifulSoup(response.content, 'html.parser')
         potential_links = []
         for link_tag in soup.find_all('a', href=True):
@@ -493,63 +523,49 @@ def download_from_google_scholar(doi, title, session):
         for plink in potential_links:
             if plink not in unique_potential_links:
                 unique_potential_links.append(plink)
-        print(f"FIXED: Found {len(unique_potential_links)} unique potential PDF links on Google Scholar: {unique_potential_links}")
         for pdf_url in unique_potential_links:
-            print(f"FIXED: Attempting to download PDF from: {pdf_url}")
             try:
                 head_response = session.head(pdf_url, headers=headers, timeout=20, allow_redirects=True)
                 head_response.raise_for_status()
                 content_type = head_response.headers.get('Content-Type', '').lower()
                 if 'application/pdf' in content_type:
-                    print(f"FIXED: HEAD request successful for {pdf_url}. Content-Type: {content_type}. Proceeding with GET.")
                     pdf_response = session.get(pdf_url, headers=headers, timeout=60, stream=True)
                     pdf_response.raise_for_status()
                     get_content_type = pdf_response.headers.get('Content-Type', '').lower()
                     if 'application/pdf' in get_content_type:
                         pdf_content = pdf_response.content
                         if len(pdf_content) < 1000:
-                            print(f"FIXED: PDF from {pdf_url} is very small ({len(pdf_content)} bytes). May not be valid. Skipping.")
                             continue
-                        print(f"FIXED: Successfully downloaded PDF from {pdf_url}")
                         domain_match = re.search(r'https?://(?:www\.)?([a-zA-Z0-9.-]+)(?:/|$)', pdf_url)
                         source_domain = domain_match.group(1) if domain_match else "Unknown Domain"
                         return pdf_content, f"OBTENIDO (Google Scholar via {source_domain})"
-                    else:
-                        print(f"FIXED: GET request for {pdf_url} did not return PDF content-type, but: {get_content_type}")
                 else:
-                    print(f"FIXED: HEAD request for {pdf_url} did not indicate PDF content-type: {content_type}. Trying GET anyway...")
                     pdf_response = session.get(pdf_url, headers=headers, timeout=60, stream=True)
                     pdf_response.raise_for_status()
                     get_content_type = pdf_response.headers.get('Content-Type', '').lower()
                     if 'application/pdf' in get_content_type:
                         pdf_content = pdf_response.content
                         if len(pdf_content) < 1000:
-                            print(f"FIXED: PDF from {pdf_url} (after GET fallback) is very small ({len(pdf_content)} bytes). Skipping.")
                             continue
-                        print(f"FIXED: Successfully downloaded PDF from {pdf_url} (after GET fallback)")
                         domain_match = re.search(r'https?://(?:www\.)?([a-zA-Z0-9.-]+)(?:/|$)', pdf_url)
                         source_domain = domain_match.group(1) if domain_match else "Unknown Domain"
                         return pdf_content, f"OBTENIDO (Google Scholar via {source_domain} - GET Fallback)"
-                    else:
-                        print(f"FIXED: GET fallback for {pdf_url} also did not return PDF content-type: {get_content_type}")
-            except requests.exceptions.HTTPError as e:
-                print(f"FIXED: HTTP error when trying {pdf_url}: {e.response.status_code if e.response else 'Unknown status'}")
+            except requests.exceptions.HTTPError:
+                pass
             except requests.exceptions.Timeout:
-                print(f"FIXED: Timeout when trying {pdf_url}")
-            except requests.exceptions.RequestException as e:
-                print(f"FIXED: Request error when trying {pdf_url}: {e}")
-            except Exception as e:
-                print(f"FIXED: Unexpected error when trying {pdf_url}: {e}")
+                pass
+            except requests.exceptions.RequestException:
+                pass
+            except Exception:
+                pass
         return None, f"FALLO - No PDF en Google Scholar ({scholar_url})"
-    except requests.exceptions.RequestException as e:
-        print(f"FIXED: Error searching Google Scholar for DOI {doi}: {e}")
+    except requests.exceptions.RequestException:
         return None, f"FALLO - Error búsqueda Google Scholar ({scholar_url})"
-    except Exception as e:
-        print(f"FIXED: Unexpected error during Google Scholar processing for DOI {doi}: {e}")
+    except Exception:
         return None, f"FALLO - Error inesperado Google Scholar ({scholar_url})"
 
 def download_with_selenium_google_scholar(driver, doi, title):
-    print(f"SELENIUM GS: Searching Google Scholar for DOI: {doi} (Title: {title if title else 'N/A'})")
+    # print(f"SELENIUM GS: Searching Google Scholar for DOI: {doi} (Title: {title if title else 'N/A'})") # Reduced noise
     scholar_url = f"https://scholar.google.com/scholar?hl=en&q={doi}"
     pdf_content = None
     status_message = f"FALLO - No PDF en Google Scholar (Selenium) ({scholar_url})"
@@ -559,25 +575,25 @@ def download_with_selenium_google_scholar(driver, doi, title):
     while initial_load_attempts < max_initial_load_attempts and not scholar_page_loaded:
         try:
             driver.set_page_load_timeout(120)
-            print(f"SELENIUM GS: Attempt {initial_load_attempts + 1}/{max_initial_load_attempts} to load {scholar_url}")
+            # print(f"SELENIUM GS: Attempt {initial_load_attempts + 1}/{max_initial_load_attempts} to load {scholar_url}") # Reduced noise
             driver.get(scholar_url)
             WebDriverWait(driver, 25).until(
                 EC.presence_of_element_located((By.ID, "gs_res_ccl_mid"))
             )
             scholar_page_loaded = True
-            print(f"SELENIUM GS: Successfully loaded {scholar_url}")
+            # print(f"SELENIUM GS: Successfully loaded {scholar_url}") # Reduced noise
             break
         except TimeoutException as e_load:
             initial_load_attempts += 1
-            print(f"SELENIUM GS: Initial page load attempt {initial_load_attempts}/{max_initial_load_attempts} timed out for {scholar_url}.")
+            # print(f"SELENIUM GS: Initial page load attempt {initial_load_attempts}/{max_initial_load_attempts} timed out for {scholar_url}.") # Reduced noise
             if initial_load_attempts < max_initial_load_attempts:
                 time.sleep(5)
             else:
-                print(f"SELENIUM GS: All initial page load attempts timed out for {scholar_url}.")
+                # print(f"SELENIUM GS: All initial page load attempts timed out for {scholar_url}.") # Reduced noise
                 return None, f"FALLO - Timeout persistente carga Google Scholar (Selenium) ({scholar_url})"
         except Exception as e_gen_load:
             initial_load_attempts += 1
-            print(f"SELENIUM GS: Unexpected error during initial page load attempt {initial_load_attempts}/{max_initial_load_attempts} for {scholar_url}: {e_gen_load}")
+            # print(f"SELENIUM GS: Unexpected error during initial page load attempt {initial_load_attempts}/{max_initial_load_attempts} for {scholar_url}: {e_gen_load}") # Reduced noise
             if initial_load_attempts < max_initial_load_attempts:
                 time.sleep(5)
             else:
@@ -591,53 +607,55 @@ def download_with_selenium_google_scholar(driver, doi, title):
                 EC.presence_of_all_elements_located((By.PARTIAL_LINK_TEXT, "[PDF]"))
             )
         except TimeoutException:
-            print(f"SELENIUM GS: No direct '[PDF]' links found for {doi}. Trying other methods.")
+            # print(f"SELENIUM GS: No direct '[PDF]' links found for {doi}. Trying other methods.") # Reduced noise
+            pass
         if not pdf_links_elements:
             try:
                 pdf_links_elements = WebDriverWait(driver, 10).until(
                     EC.presence_of_all_elements_located((By.XPATH, "//a[contains(@href, '.pdf')]"))
                 )
             except TimeoutException:
-                print(f"SELENIUM GS: No links with '.pdf' in href found for {doi}.")
-        print(f"SELENIUM GS: Found {len(pdf_links_elements)} potential PDF link elements.")
+                # print(f"SELENIUM GS: No links with '.pdf' in href found for {doi}.") # Reduced noise
+                pass
+        # print(f"SELENIUM GS: Found {len(pdf_links_elements)} potential PDF link elements.") # Reduced noise
         pdf_urls_to_try = []
         for link_el in pdf_links_elements:
             href = link_el.get_attribute('href')
             if href and href not in pdf_urls_to_try:
                 pdf_urls_to_try.append(href)
-        print(f"SELENIUM GS: Extracted {len(pdf_urls_to_try)} unique URLs to attempt.")
+        # print(f"SELENIUM GS: Extracted {len(pdf_urls_to_try)} unique URLs to attempt.") # Reduced noise
         for pdf_url_attempt in pdf_urls_to_try:
-            print(f"SELENIUM GS: Processing link: {pdf_url_attempt}")
+            # print(f"SELENIUM GS: Processing link: {pdf_url_attempt}") # Reduced noise
             if pdf_url_attempt.lower().endswith('.pdf'):
-                print(f"SELENIUM GS: Attempting direct JS fetch for PDF-like URL: {pdf_url_attempt}")
+                # print(f"SELENIUM GS: Attempting direct JS fetch for PDF-like URL: {pdf_url_attempt}") # Reduced noise
                 pdf_content = get_pdf_content_via_js(driver, pdf_url_attempt)
                 if pdf_content and len(pdf_content) > 1024:
-                    print(f"SELENIUM GS: Successfully fetched PDF via JS from direct URL: {pdf_url_attempt}")
+                    # print(f"SELENIUM GS: Successfully fetched PDF via JS from direct URL: {pdf_url_attempt}") # Reduced noise
                     return pdf_content, f"OBTENIDO (Google Scholar Selenium JS Fetch - {pdf_url_attempt})"
                 else:
-                    print(f"SELENIUM GS: JS fetch from {pdf_url_attempt} did not yield valid PDF content.")
+                    # print(f"SELENIUM GS: JS fetch from {pdf_url_attempt} did not yield valid PDF content.") # Reduced noise
                     pdf_content = None
             if not pdf_content:
-                print(f"SELENIUM GS: Attempting navigation to: {pdf_url_attempt}")
+                # print(f"SELENIUM GS: Attempting navigation to: {pdf_url_attempt}") # Reduced noise
                 try:
                     driver.get(pdf_url_attempt)
                     time.sleep(5)
                     current_url_after_nav = driver.current_url
-                    print(f"SELENIUM GS: Navigated. Current URL: {current_url_after_nav}")
+                    # print(f"SELENIUM GS: Navigated. Current URL: {current_url_after_nav}") # Reduced noise
                     pdf_content = get_pdf_content_via_js(driver, current_url_after_nav)
                     if pdf_content and len(pdf_content) > 1024:
-                        print(f"SELENIUM GS: Successfully fetched PDF via JS after navigation from {pdf_url_attempt} to {current_url_after_nav}")
+                        # print(f"SELENIUM GS: Successfully fetched PDF via JS after navigation from {pdf_url_attempt} to {current_url_after_nav}") # Reduced noise
                         return pdf_content, f"OBTENIDO (Google Scholar Selenium Nav & JS Fetch - {current_url_after_nav})"
                     else:
-                        if pdf_content is None:
-                            print(f"SELENIUM GS: JS Fetch failed or returned non-PDF for {current_url_after_nav} (after nav from {pdf_url_attempt}). Will check for embeds.")
-                        elif pdf_content:
-                            print(f"SELENIUM GS: JS Fetched content from {current_url_after_nav} (after nav from {pdf_url_attempt}) was too small ({len(pdf_content)} bytes). Will check for embeds.")
-                        else:
-                            print(f"SELENIUM GS: JS fetch from {current_url_after_nav} (after nav from {pdf_url_attempt}) did not yield valid PDF. Will check for embeds.")
+                        # if pdf_content is None: # Reduced noise
+                            # print(f"SELENIUM GS: JS Fetch failed or returned non-PDF for {current_url_after_nav} (after nav from {pdf_url_attempt}). Will check for embeds.") # Reduced noise
+                        # elif pdf_content: # Reduced noise
+                            # print(f"SELENIUM GS: JS Fetched content from {current_url_after_nav} (after nav from {pdf_url_attempt}) was too small ({len(pdf_content)} bytes). Will check for embeds.") # Reduced noise
+                        # else: # Reduced noise
+                            # print(f"SELENIUM GS: JS fetch from {current_url_after_nav} (after nav from {pdf_url_attempt}) did not yield valid PDF. Will check for embeds.") # Reduced noise
                         pdf_content = None
                     if not pdf_content:
-                        print(f"SELENIUM GS: Checking for embedded PDF on {current_url_after_nav}")
+                        # print(f"SELENIUM GS: Checking for embedded PDF on {current_url_after_nav}") # Reduced noise
                         try:
                             embed_element = WebDriverWait(driver, 5).until(
                                 EC.presence_of_element_located((By.XPATH, "//embed[@type='application/pdf']"))
@@ -646,15 +664,16 @@ def download_with_selenium_google_scholar(driver, doi, title):
                                 embed_src = embed_element.get_attribute('src')
                                 if embed_src:
                                     embed_src_abs = urljoin(current_url_after_nav, embed_src)
-                                    print(f"SELENIUM GS: Found <embed> with src: {embed_src_abs}. Attempting JS fetch.")
+                                    # print(f"SELENIUM GS: Found <embed> with src: {embed_src_abs}. Attempting JS fetch.") # Reduced noise
                                     pdf_content = get_pdf_content_via_js(driver, embed_src_abs)
                                     if pdf_content and len(pdf_content) > 1024:
-                                        print(f"SELENIUM GS: Successfully fetched PDF from <embed> src: {embed_src_abs}")
+                                        # print(f"SELENIUM GS: Successfully fetched PDF from <embed> src: {embed_src_abs}") # Reduced noise
                                         return pdf_content, f"OBTENIDO (Google Scholar Selenium Embed JS Fetch - {embed_src_abs})"
                                     else:
                                         pdf_content = None
                         except TimeoutException:
-                            print(f"SELENIUM GS: No <embed type='application/pdf'> found on {current_url_after_nav}.")
+                            # print(f"SELENIUM GS: No <embed type='application/pdf'> found on {current_url_after_nav}.") # Reduced noise
+                            pass
                         if not pdf_content:
                             try:
                                 iframe_element = WebDriverWait(driver, 5).until(
@@ -664,35 +683,38 @@ def download_with_selenium_google_scholar(driver, doi, title):
                                     iframe_src = iframe_element.get_attribute('src')
                                     if iframe_src:
                                         iframe_src_abs = urljoin(current_url_after_nav, iframe_src)
-                                        print(f"SELENIUM GS: Found <iframe> with PDF-like src: {iframe_src_abs}. Attempting JS fetch.")
+                                        # print(f"SELENIUM GS: Found <iframe> with PDF-like src: {iframe_src_abs}. Attempting JS fetch.") # Reduced noise
                                         pdf_content = get_pdf_content_via_js(driver, iframe_src_abs)
                                         if pdf_content and len(pdf_content) > 1024:
-                                            print(f"SELENIUM GS: Successfully fetched PDF from <iframe> src: {iframe_src_abs}")
+                                            # print(f"SELENIUM GS: Successfully fetched PDF from <iframe> src: {iframe_src_abs}") # Reduced noise
                                             return pdf_content, f"OBTENIDO (Google Scholar Selenium Iframe JS Fetch - {iframe_src_abs})"
                                         else:
                                             pdf_content = None
                             except TimeoutException:
-                                print(f"SELENIUM GS: No <iframe> with PDF-like src found on {current_url_after_nav}.")
+                                # print(f"SELENIUM GS: No <iframe> with PDF-like src found on {current_url_after_nav}.") # Reduced noise
+                                pass
                 except TimeoutException as e_nav_timeout:
-                    print(f"SELENIUM GS: Timeout during navigation or subsequent operations for {pdf_url_attempt}: {e_nav_timeout}")
+                    # print(f"SELENIUM GS: Timeout during navigation or subsequent operations for {pdf_url_attempt}: {e_nav_timeout}") # Reduced noise
+                    pass
                 except Exception as e_nav:
-                    print(f"SELENIUM GS: Error during navigation or subsequent operations for {pdf_url_attempt}: {e_nav}")
+                    # print(f"SELENIUM GS: Error during navigation or subsequent operations for {pdf_url_attempt}: {e_nav}") # Reduced noise
+                    pass
             if pdf_content:
                 return pdf_content, status_message
         status_message = f"FALLO - No PDF obtained after trying all potential links (Selenium GS)"
     except TimeoutException as e_element_find:
-        print(f"SELENIUM GS: Element TimeoutException after page load, while finding links for {doi} on {driver.current_url if driver else scholar_url}: {e_element_find}")
+        # print(f"SELENIUM GS: Element TimeoutException after page load, while finding links for {doi} on {driver.current_url if driver else scholar_url}: {e_element_find}") # Reduced noise
         status_message = f"FALLO - Timeout localizando elementos post-carga en Google Scholar (Selenium) ({driver.current_url if driver else scholar_url})"
     except NoSuchElementException as e_no_such:
-        print(f"SELENIUM GS: NoSuchElementException after page load, while finding links for {doi} on {driver.current_url if driver else scholar_url}: {e_no_such}")
+        # print(f"SELENIUM GS: NoSuchElementException after page load, while finding links for {doi} on {driver.current_url if driver else scholar_url}: {e_no_such}") # Reduced noise
         status_message = f"FALLO - Elemento no encontrado post-carga en Google Scholar (Selenium) ({driver.current_url if driver else scholar_url})"
     except Exception as e_general:
-        print(f"SELENIUM GS: An unexpected error occurred after page load for DOI {doi} at {driver.current_url if driver else scholar_url}: {e_general}")
+        # print(f"SELENIUM GS: An unexpected error occurred after page load for DOI {doi} at {driver.current_url if driver else scholar_url}: {e_general}") # Reduced noise
         status_message = f"FALLO - Error inesperado post-carga en Google Scholar (Selenium) ({driver.current_url if driver else scholar_url}, {str(e_general)[:100]})"
     return None, status_message
 
 def download_with_selenium_pmc(driver, doi, title):
-    print(f"SELENIUM PMC: Searching PubMed Central for DOI: {doi} (Title: {title if title else 'N/A'})")
+    # print(f"SELENIUM PMC: Searching PubMed Central for DOI: {doi} (Title: {title if title else 'N/A'})") # Reduced noise
     search_url = f"https://www.ncbi.nlm.nih.gov/pmc/?term={doi}"
     pdf_content = None
     status_message = f"FALLO - No PDF en PMC (Selenium) ({search_url})"
@@ -711,15 +733,15 @@ def download_with_selenium_pmc(driver, doi, title):
             if possible_article_links:
                 article_link_element = possible_article_links[0]
                 article_url = article_link_element.get_attribute('href')
-                print(f"SELENIUM PMC: Found article link: {article_url}. Navigating...")
+                # print(f"SELENIUM PMC: Found article link: {article_url}. Navigating...") # Reduced noise
                 driver.set_page_load_timeout(120)
                 driver.get(article_url)
-                print(f"SELENIUM PMC: Navigation to article page {article_url} presumably successful.")
+                # print(f"SELENIUM PMC: Navigation to article page {article_url} presumably successful.") # Reduced noise
             else:
-                print(f"SELENIUM PMC: No clear article link found in search results for {doi}. Assuming current page ({driver.current_url}) might be the article page or search failed.")
+                # print(f"SELENIUM PMC: No clear article link found in search results for {doi}. Assuming current page ({driver.current_url}) might be the article page or search failed.") # Reduced noise
                 article_url = driver.current_url
         except Exception as e_inner_nav:
-            print(f"SELENIUM PMC: Error during article link navigation for DOI {doi}: {e_inner_nav}. Proceeding with current page {driver.current_url}.")
+            # print(f"SELENIUM PMC: Error during article link navigation for DOI {doi}: {e_inner_nav}. Proceeding with current page {driver.current_url}.") # Reduced noise
             article_url = driver.current_url
         WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '.pdf') or contains(translate(., 'PDF', 'pdf'), 'pdf')]"))
@@ -739,10 +761,11 @@ def download_with_selenium_pmc(driver, doi, title):
                 )
                 if elements:
                     pdf_link_elements.extend(elements)
-                    print(f"SELENIUM PMC: Found elements with selector {by} {selector_val}")
+                    # print(f"SELENIUM PMC: Found elements with selector {by} {selector_val}") # Reduced noise
             except TimeoutException:
-                print(f"SELENIUM PMC: Timeout for selector {by} {selector_val}")
-        print(f"SELENIUM PMC: Found {len(pdf_link_elements)} potential PDF link elements on article page {article_url if article_url else driver.current_url}.")
+                # print(f"SELENIUM PMC: Timeout for selector {by} {selector_val}") # Reduced noise
+                pass
+        # print(f"SELENIUM PMC: Found {len(pdf_link_elements)} potential PDF link elements on article page {article_url if article_url else driver.current_url}.") # Reduced noise
         pdf_urls_to_try = []
         for link_el in pdf_link_elements:
             href = link_el.get_attribute('href')
@@ -753,35 +776,35 @@ def download_with_selenium_pmc(driver, doi, title):
                         base_for_relative = "https://www.ncbi.nlm.nih.gov"
                     href = urljoin(base_for_relative, href)
                 pdf_urls_to_try.append(href)
-        print(f"SELENIUM PMC: Extracted {len(pdf_urls_to_try)} unique absolute URLs to attempt.")
+        # print(f"SELENIUM PMC: Extracted {len(pdf_urls_to_try)} unique absolute URLs to attempt.") # Reduced noise
         for pdf_url_attempt in pdf_urls_to_try:
-            print(f"SELENIUM PMC: Processing link: {pdf_url_attempt}")
+            # print(f"SELENIUM PMC: Processing link: {pdf_url_attempt}") # Reduced noise
             if pdf_url_attempt.lower().endswith('.pdf'):
-                print(f"SELENIUM PMC: Attempting direct JS fetch for PDF-like URL: {pdf_url_attempt}")
+                # print(f"SELENIUM PMC: Attempting direct JS fetch for PDF-like URL: {pdf_url_attempt}") # Reduced noise
                 pdf_content = get_pdf_content_via_js(driver, pdf_url_attempt)
                 if pdf_content and len(pdf_content) > 1024:
-                    print(f"SELENIUM PMC: Successfully fetched PDF via JS from direct URL: {pdf_url_attempt}")
+                    # print(f"SELENIUM PMC: Successfully fetched PDF via JS from direct URL: {pdf_url_attempt}") # Reduced noise
                     return pdf_content, f"OBTENIDO (PMC Selenium JS Fetch Direct - {pdf_url_attempt})"
                 else:
-                    print(f"SELENIUM PMC: JS fetch from {pdf_url_attempt} (direct) did not yield valid PDF.")
+                    # print(f"SELENIUM PMC: JS fetch from {pdf_url_attempt} (direct) did not yield valid PDF.") # Reduced noise
                     pdf_content = None
             if not pdf_content:
-                print(f"SELENIUM PMC: Attempting navigation to: {pdf_url_attempt}")
+                # print(f"SELENIUM PMC: Attempting navigation to: {pdf_url_attempt}") # Reduced noise
                 try:
                     driver.get(pdf_url_attempt)
                     time.sleep(7)
                     current_url_after_nav = driver.current_url
-                    print(f"SELENIUM PMC: Navigated. Current URL is now: {current_url_after_nav}")
-                    print(f"SELENIUM PMC: Attempting JS fetch on current URL post-navigation: {current_url_after_nav}")
+                    # print(f"SELENIUM PMC: Navigated. Current URL is now: {current_url_after_nav}") # Reduced noise
+                    # print(f"SELENIUM PMC: Attempting JS fetch on current URL post-navigation: {current_url_after_nav}") # Reduced noise
                     pdf_content = get_pdf_content_via_js(driver, current_url_after_nav)
                     if pdf_content and len(pdf_content) > 1024:
-                        print(f"SELENIUM PMC: Successfully fetched PDF via JS from {current_url_after_nav} (after nav from {pdf_url_attempt})")
+                        # print(f"SELENIUM PMC: Successfully fetched PDF via JS from {current_url_after_nav} (after nav from {pdf_url_attempt})") # Reduced noise
                         return pdf_content, f"OBTENIDO (PMC Selenium Nav & JS Fetch - {current_url_after_nav})"
                     else:
-                        print(f"SELENIUM PMC: JS fetch from {current_url_after_nav} (after nav) did not yield PDF.")
+                        # print(f"SELENIUM PMC: JS fetch from {current_url_after_nav} (after nav) did not yield PDF.") # Reduced noise
                         pdf_content = None
                     if not pdf_content:
-                        print(f"SELENIUM PMC: Checking for embedded PDF on {current_url_after_nav}")
+                        # print(f"SELENIUM PMC: Checking for embedded PDF on {current_url_after_nav}") # Reduced noise
                         try:
                             embed_element = WebDriverWait(driver, 10).until(
                                 EC.presence_of_element_located((By.XPATH, "//embed[@type='application/pdf']"))
@@ -790,15 +813,16 @@ def download_with_selenium_pmc(driver, doi, title):
                                 embed_src = embed_element.get_attribute('src')
                                 if embed_src:
                                     embed_src_abs = urljoin(current_url_after_nav, embed_src)
-                                    print(f"SELENIUM PMC: Found <embed> with src: {embed_src_abs}. Attempting JS fetch.")
+                                    # print(f"SELENIUM PMC: Found <embed> with src: {embed_src_abs}. Attempting JS fetch.") # Reduced noise
                                     pdf_content = get_pdf_content_via_js(driver, embed_src_abs)
                                     if pdf_content and len(pdf_content) > 1024:
-                                        print(f"SELENIUM PMC: Successfully fetched PDF from <embed> src: {embed_src_abs}")
+                                        # print(f"SELENIUM PMC: Successfully fetched PDF from <embed> src: {embed_src_abs}") # Reduced noise
                                         return pdf_content, f"OBTENIDO (PMC Selenium Embed JS Fetch - {embed_src_abs})"
                                     else:
                                         pdf_content = None
                         except TimeoutException:
-                            print(f"SELENIUM PMC: No <embed type='application/pdf'> found on {current_url_after_nav}.")
+                            # print(f"SELENIUM PMC: No <embed type='application/pdf'> found on {current_url_after_nav}.") # Reduced noise
+                            pass
                         if not pdf_content:
                             try:
                                 iframe_element = WebDriverWait(driver, 5).until(
@@ -808,44 +832,47 @@ def download_with_selenium_pmc(driver, doi, title):
                                     iframe_src = iframe_element.get_attribute('src')
                                     if iframe_src:
                                         iframe_src_abs = urljoin(current_url_after_nav, iframe_src)
-                                        print(f"SELENIUM PMC: Found <iframe> with PDF-like src: {iframe_src_abs}. Attempting JS fetch.")
+                                        # print(f"SELENIUM PMC: Found <iframe> with PDF-like src: {iframe_src_abs}. Attempting JS fetch.") # Reduced noise
                                         pdf_content = get_pdf_content_via_js(driver, iframe_src_abs)
                                         if pdf_content and len(pdf_content) > 1024:
-                                            print(f"SELENIUM PMC: Successfully fetched PDF from <iframe> src: {iframe_src_abs}")
+                                            # print(f"SELENIUM PMC: Successfully fetched PDF from <iframe> src: {iframe_src_abs}") # Reduced noise
                                             return pdf_content, f"OBTENIDO (PMC Selenium Iframe JS Fetch - {iframe_src_abs})"
                                         else:
                                             pdf_content = None
                             except TimeoutException:
-                                print(f"SELENIUM PMC: No <iframe> with PDF-like src found on {current_url_after_nav}.")
+                                # print(f"SELENIUM PMC: No <iframe> with PDF-like src found on {current_url_after_nav}.") # Reduced noise
+                                pass
                 except TimeoutException as e_nav_timeout:
-                    print(f"SELENIUM PMC: Timeout during navigation to or processing of {pdf_url_attempt}: {e_nav_timeout}")
+                    # print(f"SELENIUM PMC: Timeout during navigation to or processing of {pdf_url_attempt}: {e_nav_timeout}") # Reduced noise
+                    pass
                 except Exception as e_nav:
-                    print(f"SELENIUM PMC: Error during navigation to or processing of {pdf_url_attempt}: {e_nav}")
+                    # print(f"SELENIUM PMC: Error during navigation to or processing of {pdf_url_attempt}: {e_nav}") # Reduced noise
+                    pass
             if pdf_content:
                  return pdf_content, status_message
         status_message = f"FALLO - No PDF obtained after trying all potential links (Selenium PMC)"
     except TimeoutException as e:
         current_url_for_log = driver.current_url if driver else search_url
         if current_url_for_log == search_url or (article_url and current_url_for_log == article_url and not pdf_content) or current_url_for_log == "about:blank":
-            print(f"SELENIUM PMC: Page load TimeoutException for {current_url_for_log} (DOI {doi}): {e}")
+            # print(f"SELENIUM PMC: Page load TimeoutException for {current_url_for_log} (DOI {doi}): {e}") # Reduced noise
             status_message = f"FALLO - Timeout carga página PMC (Selenium) ({current_url_for_log})"
         else:
-            print(f"SELENIUM PMC: Element TimeoutException en PMC (Selenium) for DOI {doi} at {current_url_for_log}: {e}")
+            # print(f"SELENIUM PMC: Element TimeoutException en PMC (Selenium) for DOI {doi} at {current_url_for_log}: {e}") # Reduced noise
             status_message = f"FALLO - Timeout localizando elemento en PMC (Selenium) ({current_url_for_log})"
     except NoSuchElementException as e:
         current_url_for_log = driver.current_url if driver else search_url
-        print(f"SELENIUM PMC: NoSuchElementException en PMC (Selenium) for DOI {doi} at {current_url_for_log}: {e}")
+        # print(f"SELENIUM PMC: NoSuchElementException en PMC (Selenium) for DOI {doi} at {current_url_for_log}: {e}") # Reduced noise
         status_message = f"FALLO - Elemento no encontrado en PMC (Selenium) ({current_url_for_log})"
     except Exception as e:
         current_url_for_log = driver.current_url if driver else search_url
-        print(f"SELENIUM PMC: An unexpected error occurred with Selenium for DOI {doi} at {current_url_for_log}: {e}")
+        # print(f"SELENIUM PMC: An unexpected error occurred with Selenium for DOI {doi} at {current_url_for_log}: {e}") # Reduced noise
         status_message = f"FALLO - Error inesperado en PMC (Selenium) ({current_url_for_log}, {str(e)[:100]})"
     return pdf_content, status_message
 
 import itertools
 
 def download_from_pmc(doi, title, session):
-    print(f"FIXED PMC: Attempting PubMed Central download for DOI: {doi}")
+    # print(f"FIXED PMC: Attempting PubMed Central download for DOI: {doi}") # Reduced noise
     try:
         session.headers.update({'User-Agent': STANDARD_USER_AGENT})
         id_conv_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids={doi}&format=json&tool=my_awesome_tool&email=myemail@example.com"
@@ -986,6 +1013,44 @@ def download_from_pmc(doi, title, session):
 def print_to_console(message, orig_stdout):
     print(message, file=orig_stdout)
 
+def write_excel_report(excel_path, successful_data, failed_data, all_logs, original_columns, base_scihub_url, queue):
+    if not excel_path:
+        return
+
+    try:
+        ob_cols = ['DOI', 'Title', 'Successful_Mirror'] + [c for c in original_columns if c not in ['DOI', 'Title', 'Successful_Mirror']] + ['SciHub_Link']
+        fa_cols = ['DOI', 'Title'] + [c for c in original_columns if c not in ['DOI', 'Title', 'Failure_Reason', 'Detailed_Status']] + ['Failure_Reason', 'Detailed_Status', 'SciHub_Link']
+        ti_cols = ['DOI', 'Title'] + [c for c in original_columns if c not in ['DOI', 'Title', 'Successful_Mirror', 'Start_Time', 'End_Time', 'Duration_Seconds', 'Detailed_Status', 'Failure_Reason']] + ['Successful_Mirror', 'Start_Time', 'End_Time', 'Duration_Seconds', 'Detailed_Status', 'Failure_Reason', 'SciHub_Link']
+
+        def create_ordered_df(data, cols):
+            df_ = pd.DataFrame(data)
+            df_['SciHub_Link'] = df_.apply(lambda r: f"{base_scihub_url}{r.get('DOI', r.get('doi', ''))}" if pd.notna(r.get('DOI', r.get('doi', ''))) else '', axis=1)
+            for c in cols:
+                if c not in df_.columns:
+                    df_[c] = pd.NA
+            all_data_keys = set()
+            if data:
+                all_data_keys.update(k for item in data for k in item.keys())
+            final_cols_ordered = [c for c in cols if c in all_data_keys or c == 'SciHub_Link']
+            final_cols_ordered.extend([k for k in all_data_keys if k not in final_cols_ordered and k != 'SciHub_Link'])
+            return df_.reindex(columns=final_cols_ordered)
+
+        df_obtenidos = create_ordered_df(successful_data, ob_cols)
+        df_fallidos = create_ordered_df(failed_data, fa_cols)
+        df_tiempos = create_ordered_df(all_logs, ti_cols)
+
+        with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+            df_obtenidos.to_excel(writer, sheet_name='Obtenidos', index=False)
+            df_fallidos.to_excel(writer, sheet_name='Fallidos', index=False)
+            df_tiempos.to_excel(writer, sheet_name='Tiempos', index=False)
+    except Exception as e:
+        # Using print here because this function might be called where the queue is not available
+        # or in a context where a GUI update is not the main point.
+        print(f"Error guardando reporte Excel: {e}")
+        if queue:
+            queue.put({'type': 'error', 'message': f"Error guardando Excel: {e}"})
+
+
 def download_pdfs_from_file(config, queue):
     driver = None
     original_stdout = sys.stdout
@@ -993,17 +1058,20 @@ def download_pdfs_from_file(config, queue):
     try:
         # --- WebDriver Initialization ---
         try:
+            os.environ['WDM_LOG_LEVEL'] = '0'
             options = webdriver.ChromeOptions()
             options.add_argument('--headless')
             options.add_argument('--disable-gpu')
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
-            print("Inicializando WebDriver de Selenium en modo headless...")
+            options.add_argument('--log-level=3')
+            options.add_experimental_option('excludeSwitches', ['enable-logging'])
+            # print("Inicializando WebDriver de Selenium en modo headless...") # Reduced noise
             driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
-            print("WebDriver de Selenium inicializado correctamente.")
+            # print("WebDriver de Selenium inicializado correctamente.") # Reduced noise
         except Exception as e:
-            print(f"Error al inicializar WebDriver de Selenium: {e}")
-            print("Las descargas basadas en Selenium se omitirán.")
+            # print(f"Error al inicializar WebDriver de Selenium: {e}") # Reduced noise
+            # print("Las descargas basadas en Selenium se omitirán.") # Reduced noise
             driver = None
 
         # --- Configuration Unpacking ---
@@ -1065,10 +1133,16 @@ def download_pdfs_from_file(config, queue):
             queue.put({'type': 'error', 'message': "DataFrame no pudo ser cargado."})
             return
 
+        # Initial Excel file creation
+        if excel_report_path_config:
+            write_excel_report(excel_report_path_config, [], [], [], original_input_columns, sci_hub_base_url_for_report, queue)
+
         # --- Main Processing Loop ---
         successful_downloads = 0
         total_downloaded_size_bytes = 0
         total_articles = len(df)
+        source_stats = {}
+        process_start_time = time.time()
         queue.put({'type': 'total', 'value': total_articles})
 
         try:
@@ -1078,6 +1152,9 @@ def download_pdfs_from_file(config, queue):
                     start_time = datetime.now()
                     doi = str(original_row_data.get('DOI', original_row_data.get('doi', ''))).strip()
                     title = str(original_row_data.get('Title', original_row_data.get('title', ''))).strip()
+
+                    article_display_text = f"Título: {title}\nDOI: {doi}"
+                    queue.put({'type': 'current_article', 'value': article_display_text})
                     effective_title = title if title else doi
 
                     current_article_num_for_log = index + 1
@@ -1185,7 +1262,7 @@ def download_pdfs_from_file(config, queue):
                                 time.sleep(user_mirror_switch_delay)
 
                     if not pdf_content and driver:
-                        print(f"INFO: DOI {doi} - Attempting Google Scholar (Selenium method)...")
+                        # print(f"INFO: DOI {doi} - Attempting Google Scholar (Selenium method)...") # Reduced noise
                         gs_selenium_pdf_content, gs_selenium_status_msg = download_with_selenium_google_scholar(driver, doi, effective_title)
                         if gs_selenium_pdf_content:
                             pdf_content = gs_selenium_pdf_content
@@ -1201,7 +1278,7 @@ def download_pdfs_from_file(config, queue):
                             temp_detailed_status_for_log = f"Failure_GoogleScholar_Selenium_{gs_selenium_status_msg}"
 
                     if not pdf_content and driver:
-                        print(f"INFO: DOI {doi} - Attempting PubMed Central (Selenium method)...")
+                        # print(f"INFO: DOI {doi} - Attempting PubMed Central (Selenium method)...") # Reduced noise
                         pmc_selenium_pdf_content, pmc_selenium_status_msg = download_with_selenium_pmc(driver, doi, effective_title)
                         if pmc_selenium_pdf_content:
                             pdf_content = pmc_selenium_pdf_content
@@ -1219,6 +1296,17 @@ def download_pdfs_from_file(config, queue):
                     end_time = datetime.now()
                     if download_successful_this_doi and pdf_content:
                         successful_downloads += 1
+
+                        source_name = successful_mirror_for_this_doi
+                        if "sci-hub" in source_name.lower():
+                            try:
+                                domain_match = re.search(r'https?://(?:www\.)?([a-zA-Z0-9.-]+)(?:/|$)', source_name)
+                                source_name = domain_match.group(1) if domain_match else source_name
+                            except Exception:
+                                pass
+                        source_stats[source_name] = source_stats.get(source_name, 0) + 1
+                        queue.put({'type': 'source_stat', 'stats': source_stats})
+
                         if not overall_doi_status.startswith("OBTENIDO"):
                             overall_doi_status = "OBTENIDO"
                         data_for_successful_sheet = original_row_data.copy()
@@ -1248,7 +1336,33 @@ def download_pdfs_from_file(config, queue):
 
                     queue.put({'type': 'progress', 'searched': index + 1, 'found': successful_downloads})
 
+                    # --- ETA Calculation ---
+                    articles_processed = index + 1
+                    elapsed_time = time.time() - process_start_time
+                    if articles_processed > 0:
+                        avg_time_per_article = elapsed_time / articles_processed
+                        articles_remaining = total_articles - articles_processed
+                        estimated_remaining_time = articles_remaining * avg_time_per_article
+
+                        if estimated_remaining_time > 0:
+                            mins, secs = divmod(estimated_remaining_time, 60)
+                            hours, mins = divmod(mins, 60)
+                            eta_string = ""
+                            if hours > 0:
+                                eta_string += f"{int(hours)}h "
+                            if mins > 0 or hours > 0:
+                                eta_string += f"{int(mins)}m "
+                            eta_string += f"{int(secs)}s"
+                        else:
+                            eta_string = "Completado"
+
+                        queue.put({'type': 'time_update', 'value': eta_string})
+
                     print_to_console("===============================================================================================", original_stdout)
+
+                    # Dynamic Excel Report Writing
+                    write_excel_report(excel_report_path_config, successful_articles_data, failed_articles_data, all_articles_log, original_input_columns, sci_hub_base_url_for_report, queue)
+
                     if current_article_num_for_log < total_articles:
                         time.sleep(user_inter_doi_delay)
                     if download_successful_this_doi and "Google Scholar" in successful_mirror_for_this_doi:
@@ -1325,7 +1439,7 @@ def download_pdfs_from_file(config, queue):
                     if mirror_idx_retry < len(mirrors_for_retry) - 1:
                         time.sleep(user_mirror_switch_delay)
             if not pdf_content_retry and driver:
-                print(f"INFO: DOI {doi_to_retry} [RETRY] - Attempting Google Scholar (Selenium method)...")
+                # print(f"INFO: DOI {doi_to_retry} [RETRY] - Attempting Google Scholar (Selenium method)...") # Reduced noise
                 gs_selenium_pdf_content_retry, gs_selenium_status_msg_retry = download_with_selenium_google_scholar(driver, doi_to_retry, effective_title_for_retry)
                 if gs_selenium_pdf_content_retry:
                     pdf_content_retry = gs_selenium_pdf_content_retry
@@ -1340,7 +1454,7 @@ def download_pdfs_from_file(config, queue):
                     temp_failure_reason_for_retry_log = gs_selenium_status_msg_retry
                     temp_detailed_status_for_retry_log = f"Failure_RETRY_GoogleScholar_Selenium_{gs_selenium_status_msg_retry}"
             if not pdf_content_retry and driver:
-                print(f"INFO: DOI {doi_to_retry} [RETRY] - Attempting PubMed Central (Selenium method)...")
+                # print(f"INFO: DOI {doi_to_retry} [RETRY] - Attempting PubMed Central (Selenium method)...") # Reduced noise
                 pmc_selenium_pdf_content_retry, pmc_selenium_status_msg_retry = download_with_selenium_pmc(driver, doi_to_retry, effective_title_for_retry)
                 if pmc_selenium_pdf_content_retry:
                     pdf_content_retry = pmc_selenium_pdf_content_retry
@@ -1358,6 +1472,17 @@ def download_pdfs_from_file(config, queue):
             original_article_log_entry = next((log for log in all_articles_log if str(log.get('DOI', log.get('doi', ''))).strip() == doi_to_retry), None)
             if retry_successful_this_doi and pdf_content_retry:
                 successful_downloads += 1
+
+                source_name_retry = successful_mirror_for_retry
+                if "sci-hub" in source_name_retry.lower():
+                    try:
+                        domain_match = re.search(r'https?://(?:www\.)?([a-zA-Z0-9.-]+)(?:/|$)', source_name_retry)
+                        source_name_retry = domain_match.group(1) if domain_match else source_name_retry
+                    except Exception:
+                        pass
+                source_stats[source_name_retry] = source_stats.get(source_name_retry, 0) + 1
+                queue.put({'type': 'source_stat', 'stats': source_stats})
+
                 queue.put({'type': 'progress', 'searched': total_articles, 'found': successful_downloads})
                 if not overall_retry_status.startswith("OBTENIDO"):
                      overall_retry_status = "OBTENIDO"
@@ -1399,6 +1524,15 @@ def download_pdfs_from_file(config, queue):
                         item['Detailed_Status'] = temp_detailed_status_for_retry_log
                         break
             format_and_log_article_status(failed_article_entry, doi_to_retry, effective_title_for_retry, current_article_num_for_log_retry, total_articles, successful_downloads, mirror_attempts_details_for_retry, overall_retry_status, user_inter_doi_delay, is_retry=True, failed_articles_data_len=len(temp_failed_articles_data_for_iteration) - retry_idx)
+
+            # Update the Excel report after the retry attempt
+            if articles_successfully_retried_ids:
+                # This is slightly inefficient as it rebuilds the list every time, but it's the safest way to ensure correctness
+                current_failed_articles_data = [item for item in temp_failed_articles_data_for_iteration if str(item.get('DOI', item.get('doi', ''))).strip() not in articles_successfully_retried_ids]
+                write_excel_report(excel_report_path_config, successful_articles_data, current_failed_articles_data, all_articles_log, original_input_columns, sci_hub_base_url_for_report, queue)
+            else:
+                 write_excel_report(excel_report_path_config, successful_articles_data, failed_articles_data, all_articles_log, original_input_columns, sci_hub_base_url_for_report, queue)
+
             print_to_console("===============================================================================================", original_stdout)
             if retry_idx < len(temp_failed_articles_data_for_iteration) - 1:
                 time.sleep(user_inter_doi_delay)
@@ -1417,38 +1551,10 @@ def download_pdfs_from_file(config, queue):
 
         print("\n" + "="*50); print(summary_message); print("="*50);
 
-        # --- Excel Report Generation ---
-        excel_report_path_to_use = excel_report_path_config
-        if excel_report_path_to_use:
-            print(f"Generando reporte Excel en: {excel_report_path_to_use}")
-            try:
-                ob_cols = ['DOI','Title','Successful_Mirror'] + [c for c in original_input_columns if c not in ['DOI','Title','Successful_Mirror']] + ['SciHub_Link']
-                fa_cols = ['DOI','Title'] + [c for c in original_input_columns if c not in ['DOI','Title','Failure_Reason','Detailed_Status']] + ['Failure_Reason','Detailed_Status','SciHub_Link']
-                ti_cols = ['DOI','Title'] + [c for c in original_input_columns if c not in ['DOI','Title','Successful_Mirror','Start_Time','End_Time','Duration_Seconds','Detailed_Status','Failure_Reason']] + ['Successful_Mirror','Start_Time','End_Time','Duration_Seconds','Detailed_Status','Failure_Reason','SciHub_Link']
-                def create_ordered_df(data, cols):
-                    df_ = pd.DataFrame(data)
-                    df_['SciHub_Link'] = df_.apply(lambda r: f"{sci_hub_base_url_for_report}{r.get('DOI',r.get('doi',''))}" if pd.notna(r.get('DOI',r.get('doi',''))) else '', axis=1)
-                    for c in cols:
-                        if c not in df_.columns:
-                            df_[c] = pd.NA
-                    all_data_keys = set()
-                    if data:
-                        all_data_keys.update(k for item in data for k in item.keys())
-                    final_cols_ordered = [c for c in cols if c in all_data_keys or c == 'SciHub_Link']
-                    final_cols_ordered.extend([k for k in all_data_keys if k not in final_cols_ordered and k != 'SciHub_Link'])
-                    return df_.reindex(columns=final_cols_ordered)
-
-                df_obtenidos = create_ordered_df(successful_articles_data, ob_cols)
-                df_fallidos = create_ordered_df(failed_articles_data, fa_cols)
-                df_tiempos = create_ordered_df(all_articles_log, ti_cols)
-                with pd.ExcelWriter(excel_report_path_to_use, engine='openpyxl') as writer:
-                    df_obtenidos.to_excel(writer, sheet_name='Obtenidos', index=False)
-                    df_fallidos.to_excel(writer, sheet_name='Fallidos', index=False)
-                    df_tiempos.to_excel(writer, sheet_name='Tiempos', index=False)
-                print(f"Reporte Excel guardado: {excel_report_path_to_use}")
-            except Exception as e:
-                print(f"Error guardando reporte Excel: {e}")
-                queue.put({'type': 'error', 'message': f"Error guardando Excel: {e}"})
+        # The final report is now written after every step, so this final block is redundant.
+        # However, we can keep a final print message.
+        if excel_report_path_config:
+            print(f"Reporte Excel final guardado en: {excel_report_path_config}")
         else:
             print("Generación de reporte Excel omitida (ruta no especificada).")
 

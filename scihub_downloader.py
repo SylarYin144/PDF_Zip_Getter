@@ -7,7 +7,10 @@ class ConfigurationGUI:
     def __init__(self, master):
         self.master = master
         master.title("Configuración de Sci-Hub Downloader")
-        master.geometry("600x550") # Increased height for scrollbar visibility
+        master.geometry("600x550")
+        # --- Make Window Resizable ---
+        master.rowconfigure(0, weight=1)
+        master.columnconfigure(0, weight=1)
 
         self.config = {}
         self.cancel_event = threading.Event()
@@ -15,33 +18,38 @@ class ConfigurationGUI:
 
         # Frame principal
         main_frame = tk.Frame(master, padx=10, pady=10)
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.grid(row=0, column=0, sticky="nsew")
+        main_frame.rowconfigure(1, weight=1) # Allow row 1 (config or progress) to expand
+        main_frame.columnconfigure(0, weight=1) # Allow column 0 to expand
 
         # --- Frame de Configuración (visible al inicio) ---
         self.config_frame = tk.Frame(main_frame)
-        self.config_frame.pack(fill=tk.BOTH, expand=True)
+        self.config_frame.grid(row=1, column=0, sticky="nsew")
+        self.config_frame.columnconfigure(0, weight=1)
+        self.config_frame.rowconfigure(3, weight=1) # Let the mirrors frame expand vertically
 
         paths_frame = tk.LabelFrame(self.config_frame, text="Rutas de Archivos", padx=10, pady=10)
-        paths_frame.pack(fill=tk.X, pady=5)
+        paths_frame.grid(row=0, column=0, sticky="ew", pady=5)
+        paths_frame.columnconfigure(1, weight=1) # Make the entry column expandable
 
         self.input_path = tk.StringVar()
         self.zip_path = tk.StringVar()
         self.report_path = tk.StringVar()
 
         tk.Label(paths_frame, text="Archivo de DOIs (Excel/CSV):").grid(row=0, column=0, sticky=tk.W, pady=2)
-        tk.Entry(paths_frame, textvariable=self.input_path, width=50).grid(row=0, column=1, padx=5)
+        tk.Entry(paths_frame, textvariable=self.input_path, width=50).grid(row=0, column=1, padx=5, sticky="ew")
         tk.Button(paths_frame, text="...", command=self.browse_input_file).grid(row=0, column=2)
 
         tk.Label(paths_frame, text="Guardar ZIP en:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        tk.Entry(paths_frame, textvariable=self.zip_path, width=50).grid(row=1, column=1, padx=5)
+        tk.Entry(paths_frame, textvariable=self.zip_path, width=50).grid(row=1, column=1, padx=5, sticky="ew")
         tk.Button(paths_frame, text="...", command=self.browse_zip_file).grid(row=1, column=2)
 
         tk.Label(paths_frame, text="Guardar Reporte Excel en:").grid(row=2, column=0, sticky=tk.W, pady=2)
-        tk.Entry(paths_frame, textvariable=self.report_path, width=50).grid(row=2, column=1, padx=5)
+        tk.Entry(paths_frame, textvariable=self.report_path, width=50).grid(row=2, column=1, padx=5, sticky="ew")
         tk.Button(paths_frame, text="...", command=self.browse_report_file).grid(row=2, column=2)
 
         delays_frame = tk.LabelFrame(self.config_frame, text="Retrasos (segundos)", padx=10, pady=10)
-        delays_frame.pack(fill=tk.X, pady=5)
+        delays_frame.grid(row=2, column=0, sticky="ew", pady=5)
 
         self.inter_doi_delay = tk.StringVar(value=str(INTER_DOI_DELAY_SECONDS))
         self.mirror_switch_delay = tk.StringVar(value=str(MIRROR_SWITCH_DELAY_SECONDS))
@@ -52,14 +60,15 @@ class ConfigurationGUI:
         tk.Entry(delays_frame, textvariable=self.mirror_switch_delay, width=5).pack(side=tk.LEFT)
 
         mirrors_frame = tk.LabelFrame(self.config_frame, text="Mirrors de Sci-Hub (separados por coma)", padx=10, pady=10)
-        mirrors_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        mirrors_frame.grid(row=3, column=0, sticky="nsew", pady=5)
+        mirrors_frame.rowconfigure(0, weight=1)
+        mirrors_frame.columnconfigure(0, weight=1)
 
         self.mirrors_text = scrolledtext.ScrolledText(mirrors_frame, wrap=tk.WORD, height=5)
-        self.mirrors_text.pack(fill=tk.BOTH, expand=True)
-        self.mirrors_text.insert(tk.END, ",".join(DEFAULT_SCI_HUB_MIRRORS_EXAMPLE))
+        self.mirrors_text.grid(row=0, column=0, sticky="nsew")
 
         buttons_frame = tk.Frame(self.config_frame)
-        buttons_frame.pack(fill=tk.X, pady=10)
+        buttons_frame.grid(row=4, column=0, sticky="ew", pady=10)
 
         self.start_button = tk.Button(buttons_frame, text="Iniciar Proceso", command=self.start_process, bg="green", fg="white")
         self.start_button.pack(side=tk.RIGHT, padx=5)
@@ -68,6 +77,8 @@ class ConfigurationGUI:
 
         # --- Frame de Progreso (Scrollable, inicialmente oculto) ---
         self.progress_view_container = tk.Frame(main_frame)
+        self.progress_view_container.columnconfigure(0, weight=1)
+        self.progress_view_container.rowconfigure(0, weight=1)
 
         canvas = tk.Canvas(self.progress_view_container)
         scrollbar = tk.Scrollbar(self.progress_view_container, orient="vertical", command=canvas.yview)
@@ -83,32 +94,36 @@ class ConfigurationGUI:
         canvas.create_window((0, 0), window=self.scrollable_progress_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
 
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
 
         # --- Contenido del Frame de Progreso ---
         progress_content_frame = self.scrollable_progress_frame
+        progress_content_frame.columnconfigure(0, weight=1)
 
+        # Progress Bar 1
         tk.Label(progress_content_frame, text="Progreso Total (Artículos Buscados):", font="-weight bold").grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
         self.pbar_searched = ttk.Progressbar(progress_content_frame, length=300)
-        self.pbar_searched.grid(row=1, column=0, sticky=tk.EW, padx=5, pady=(0, 10))
+        self.pbar_searched.grid(row=1, column=0, columnspan=2, sticky=tk.EW, padx=5)
         self.pbar_searched_label_var = tk.StringVar(value="0/0 (0.00%)")
-        tk.Label(progress_content_frame, textvariable=self.pbar_searched_label_var).grid(row=1, column=1, sticky=tk.W, padx=5)
+        tk.Label(progress_content_frame, textvariable=self.pbar_searched_label_var).grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(0,10))
 
-        tk.Label(progress_content_frame, text="Éxito (Encontrados de Buscados):", font="-weight bold").grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
+        # Progress Bar 2
+        tk.Label(progress_content_frame, text="Éxito (Encontrados de Buscados):", font="-weight bold").grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
         self.pbar_found_of_searched = ttk.Progressbar(progress_content_frame, length=300)
-        self.pbar_found_of_searched.grid(row=3, column=0, sticky=tk.EW, padx=5, pady=(0, 10))
+        self.pbar_found_of_searched.grid(row=4, column=0, columnspan=2, sticky=tk.EW, padx=5)
         self.pbar_found_of_searched_label_var = tk.StringVar(value="0/0 (0.00%)")
-        tk.Label(progress_content_frame, textvariable=self.pbar_found_of_searched_label_var).grid(row=3, column=1, sticky=tk.W, padx=5)
+        tk.Label(progress_content_frame, textvariable=self.pbar_found_of_searched_label_var).grid(row=5, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(0,10))
 
-        tk.Label(progress_content_frame, text="Éxito (Encontrados del Total):", font="-weight bold").grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
+        # Progress Bar 3
+        tk.Label(progress_content_frame, text="Éxito (Encontrados del Total):", font="-weight bold").grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
         self.pbar_found_of_total = ttk.Progressbar(progress_content_frame, length=300)
-        self.pbar_found_of_total.grid(row=5, column=0, sticky=tk.EW, padx=5, pady=(0, 10))
+        self.pbar_found_of_total.grid(row=7, column=0, columnspan=2, sticky=tk.EW, padx=5)
         self.pbar_found_of_total_label_var = tk.StringVar(value="0/0 (0.00%)")
-        tk.Label(progress_content_frame, textvariable=self.pbar_found_of_total_label_var).grid(row=5, column=1, sticky=tk.W, padx=5)
+        tk.Label(progress_content_frame, textvariable=self.pbar_found_of_total_label_var).grid(row=8, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(0,10))
 
         time_stats_frame = tk.Frame(progress_content_frame)
-        time_stats_frame.grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=(10,0))
+        time_stats_frame.grid(row=9, column=0, columnspan=2, sticky=tk.W, pady=(10,0))
 
         tk.Label(time_stats_frame, text="Tiempo Transcurrido:", font="-weight bold").grid(row=0, column=0, sticky=tk.W)
         self.elapsed_time_var = tk.StringVar(value="0s")
@@ -123,19 +138,18 @@ class ConfigurationGUI:
         tk.Label(time_stats_frame, textvariable=self.eta_label_var).grid(row=2, column=1, sticky=tk.W, padx=5)
 
         self.current_article_frame = tk.LabelFrame(progress_content_frame, text="Procesando Artículo", padx=10, pady=10)
-        self.current_article_frame.grid(row=7, column=0, columnspan=2, sticky="ew", pady=10)
-        self.current_article_label_var = tk.StringVar(value="Iniciando...")
-        tk.Label(self.current_article_frame, textvariable=self.current_article_label_var, justify=tk.LEFT).pack(anchor=tk.W)
+        self.current_article_frame.grid(row=10, column=0, columnspan=2, sticky="ew", pady=10)
+        self.current_article_text = scrolledtext.ScrolledText(self.current_article_frame, height=6, wrap=tk.WORD)
+        self.current_article_text.pack(fill="both", expand=True)
+        self.current_article_text.insert(tk.END, "Iniciando...")
+        self.current_article_text.config(state="disabled")
 
         self.final_status_label_var = tk.StringVar(value="Proceso en ejecución...")
-        tk.Label(progress_content_frame, textvariable=self.final_status_label_var, pady=20, font="-weight bold").grid(row=8, column=0, columnspan=2, sticky=tk.W)
+        tk.Label(progress_content_frame, textvariable=self.final_status_label_var, pady=20, font="-weight bold").grid(row=11, column=0, columnspan=2, sticky=tk.W)
 
         self.source_stats_frame = tk.LabelFrame(progress_content_frame, text="Estadísticas de Origen", padx=10, pady=10)
-        self.source_stats_frame.grid(row=9, column=0, columnspan=2, sticky="ew", pady=10)
+        self.source_stats_frame.grid(row=12, column=0, columnspan=2, sticky="ew", pady=10)
         self.source_stats_labels = {}
-
-        progress_content_frame.columnconfigure(0, weight=1)
-
 
     def process_queue(self):
         try:
@@ -174,7 +188,10 @@ class ConfigurationGUI:
                 return # Stop polling
 
             elif message['type'] == 'current_article':
-                self.current_article_label_var.set(message['value'])
+                self.current_article_text.config(state="normal")
+                self.current_article_text.delete("1.0", tk.END)
+                self.current_article_text.insert(tk.END, message['value'])
+                self.current_article_text.config(state="disabled")
 
             elif message['type'] == 'time_update':
                 self.eta_label_var.set(message['value']['eta'])
@@ -194,6 +211,9 @@ class ConfigurationGUI:
                         self.source_stats_labels[source].pack(anchor=tk.W)
                     else:
                         self.source_stats_labels[source].config(text=text)
+
+            elif message['type'] == 'set_cursor':
+                self.master.config(cursor=message['value'])
 
             elif message['type'] == 'error':
                 self.final_status_label_var.set(f"ERROR: {message['message']}")
@@ -254,8 +274,8 @@ class ConfigurationGUI:
         self.cancel_event.clear() # Reset event in case of re-run
 
         # Switch to the progress view
-        self.config_frame.pack_forget()
-        self.progress_view_container.pack(fill=tk.BOTH, expand=True)
+        self.config_frame.grid_remove()
+        self.progress_view_container.grid(row=1, column=0, sticky="nsew")
 
         # Create queue for thread communication
         self.progress_queue = Queue()
@@ -907,148 +927,6 @@ def download_with_selenium_pmc(driver, doi, title):
 
 import itertools
 
-def download_from_pmc(doi, title, session):
-    # print(f"FIXED PMC: Attempting PubMed Central download for DOI: {doi}") # Reduced noise
-    try:
-        session.headers.update({'User-Agent': STANDARD_USER_AGENT})
-        id_conv_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids={doi}&format=json&tool=my_awesome_tool&email=myemail@example.com"
-        try:
-            response_id_conv = session.get(id_conv_url, timeout=20)
-            response_id_conv.raise_for_status()
-            data_id_conv = response_id_conv.json()
-        except requests.exceptions.RequestException as e:
-            return None, f"FALLO - Error API conversión PMCID para {doi} ({str(e)[:50]})"
-        except json.JSONDecodeError:
-            return None, f"FALLO - Error decodificando respuesta PMCID para {doi}"
-        pmcid = None
-        if data_id_conv.get("records") and len(data_id_conv["records"]) > 0:
-            record = data_id_conv["records"][0]
-            if record.get("pmcid"):
-                 pmcid = record["pmcid"]
-                 if record.get("status") == "error" and record.get("errmsg") == "invalid article id":
-                      pass
-            elif record.get("status") == "error":
-                return None, f"FALLO - PMCID no encontrado, API devolvió '{record.get('errmsg', 'Unknown error')}' para DOI {doi}"
-        if not pmcid:
-            return None, f"FALLO - PMCID no encontrado para DOI {doi} (Respuesta: {data_id_conv})"
-        efetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pmc&id={pmcid}&rettype=xml&tool=my_awesome_tool&email=myemail@example.com"
-        try:
-            response_efetch = session.get(efetch_url, timeout=45)
-            response_efetch.raise_for_status()
-            xml_content_bytes = response_efetch.content
-            root = ET.fromstring(xml_content_bytes)
-            pdf_filename_from_xml = None
-            pdf_url_from_xml_constructed = None
-            namespaces = {'xlink': 'http://www.w3.org/1999/xlink'}
-            for tag_name_to_search in ["self-uri", "uri"]:
-                combined_iterator = itertools.chain(
-                    root.iterfind(f".//{tag_name_to_search}"),
-                    root.iterfind(f".//{{{namespaces['xlink']}}}{tag_name_to_search}")
-                )
-                for element in combined_iterator:
-                    content_type = element.get("content-type", "").lower()
-                    href_xlink = element.get(f"{{{namespaces['xlink']}}}href")
-                    href_plain = element.get("href")
-                    current_href_value = None
-                    if href_xlink:
-                        current_href_value = href_xlink
-                    elif href_plain:
-                        current_href_value = href_plain
-                    if "pdf" in content_type and current_href_value:
-                        current_href_value = current_href_value.strip()
-                        if current_href_value.lower().endswith('.pdf') or '.pdf?' in current_href_value.lower():
-                            pdf_filename_from_xml = current_href_value
-                            break
-                if pdf_filename_from_xml:
-                    break
-            if not pdf_filename_from_xml:
-                for element in root.iterfind(".//article-id[@pub-id-type='pmc-pdf']"):
-                    if element.text:
-                        href_value = element.text.strip()
-                        if href_value.lower().endswith('.pdf') or '.pdf?' in href_value.lower():
-                            pdf_filename_from_xml = href_value
-                            break
-            if pdf_filename_from_xml:
-                if pdf_filename_from_xml.startswith('http://') or pdf_filename_from_xml.startswith('https://'):
-                    pdf_url_from_xml_constructed = pdf_filename_from_xml
-                elif not pdf_filename_from_xml.startswith('/'):
-                    pdf_url_from_xml_constructed = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/pdf/{pdf_filename_from_xml}"
-                else:
-                    pdf_url_from_xml_constructed = urljoin(f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/", pdf_filename_from_xml)
-                try:
-                    head_response = session.head(pdf_url_from_xml_constructed, timeout=20, allow_redirects=True)
-                    head_response.raise_for_status()
-                    content_type_head = head_response.headers.get('Content-Type', '').lower()
-                    if 'application/pdf' in content_type_head:
-                        pdf_response = session.get(pdf_url_from_xml_constructed, timeout=60, stream=True)
-                        pdf_response.raise_for_status()
-                        content_type_get = pdf_response.headers.get('Content-Type', '').lower()
-                        if 'application/pdf' in content_type_get:
-                            pdf_content_bytes = pdf_response.content
-                            if len(pdf_content_bytes) > 1000:
-                                return pdf_content_bytes, f"OBTENIDO (PMC Efetch XML {pmcid})"
-                    else:
-                        pdf_response = session.get(pdf_url_from_xml_constructed, timeout=60, stream=True)
-                        pdf_response.raise_for_status()
-                        content_type_get = pdf_response.headers.get('Content-Type', '').lower()
-                        if 'application/pdf' in content_type_get:
-                            pdf_content_bytes = pdf_response.content
-                            if len(pdf_content_bytes) > 1000:
-                                return pdf_content_bytes, f"OBTENIDO (PMC Efetch XML - GET Fallback {pmcid})"
-                except requests.exceptions.RequestException as e_dl:
-                    pass
-        except requests.exceptions.RequestException:
-            pass
-        except ET.ParseError:
-            pass
-        article_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/"
-        try:
-            response_html = session.get(article_url, timeout=30)
-            response_html.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            return None, f"FALLO - Error obteniendo página HTML PMC ({article_url}, {str(e)[:50]})"
-        soup = BeautifulSoup(response_html.content, 'html.parser')
-        potential_html_pdf_links = []
-        selectors = [
-            'div.format-menu a[href$=".pdf"]', 'ul.format-menu a[href$=".pdf"]',
-            'div.full-text-links a[href$=".pdf"]', 'li.pdf-link a[href$=".pdf"]',
-            'a.format-pdf[href$=".pdf"]', 'a.pdf-button[href$=".pdf"]', 'a.pdf-btn[href$=".pdf"]',
-            'a[title*="PDF"][href$=".pdf"]', 'a[data-format="pdf"][href$=".pdf"]',
-            'a[download$=".pdf"]',
-            'div.buttons.article-actions a.pdf-download[href*="pdf"]'
-        ]
-        for selector in selectors:
-            for link_tag in soup.select(selector):
-                href = link_tag.get('href')
-                if href: potential_html_pdf_links.append(urljoin(article_url, href.strip()))
-        if not potential_html_pdf_links:
-            for link_tag in soup.find_all('a', href=lambda h: h is not None and (h.lower().endswith('.pdf') or '.pdf?' in h.lower())):
-                href = link_tag.get('href')
-                if pmcid.lower() in href.lower() or "articles" in href.lower() or "ftrender" in href.lower():
-                     potential_html_pdf_links.append(urljoin(article_url, href.strip()))
-        unique_html_pdf_links = []
-        for plink in potential_html_pdf_links:
-            if plink not in unique_html_pdf_links: unique_html_pdf_links.append(plink)
-        if not unique_html_pdf_links:
-            return None, f"FALLO - PDF no encontrado en HTML página PMC ({article_url})"
-        for pdf_url_html in unique_html_pdf_links:
-            try:
-                pdf_response = session.get(pdf_url_html, timeout=60, stream=True)
-                pdf_response.raise_for_status()
-                content_type = pdf_response.headers.get('Content-Type', '').lower()
-                if 'application/pdf' in content_type:
-                    pdf_data = pdf_response.content
-                    if len(pdf_data) > 1000:
-                        return pdf_data, f"OBTENIDO (PMC HTML {pmcid})"
-            except requests.exceptions.RequestException:
-                continue
-        return None, f"FALLO - No se pudo descargar PDF desde enlaces HTML PMC ({article_url})"
-    except Exception as e:
-        return None, f"FALLO - Error inesperado en PubMed Central para {doi} ({str(e)[:50]})"
-
-def print_to_console(message, orig_stdout):
-    print(message, file=orig_stdout)
-
 def get_general_source_name(source_string):
     source_lower = source_string.lower()
     if "sci-hub" in source_lower:
@@ -1222,8 +1100,15 @@ def download_pdfs_from_file(config, queue, cancel_event):
                     year_str = f"Publication Year: {original_row_data.get('Publication Year', 'N/A')}"
                     doi_str = f"DOI: {doi}"
 
-                    # Single line format as requested
-                    article_display_text = f"{article_progress_str} {title_str} {author_str} {journal_str} {year_str} {doi_str}"
+                    # Multi-line format for better readability in a text box
+                    article_display_text = (
+                        f"{article_progress_str}\n"
+                        f"{title_str}\n"
+                        f"{author_str}\n"
+                        f"{journal_str}\n"
+                        f"{year_str}\n"
+                        f"{doi_str}"
+                    )
                     queue.put({'type': 'current_article', 'value': article_display_text})
                     mirror_attempts_details_for_doi = []
                     overall_doi_status = "FALTANTE"
@@ -1249,6 +1134,7 @@ def download_pdfs_from_file(config, queue, cancel_event):
                     temp_detailed_status_for_log = ""
                     temp_failure_reason_for_log = ""
 
+                    queue.put({'type': 'set_cursor', 'value': 'watch'})
                     for mirror_idx, current_mirror_base_url in enumerate(mirrors_to_try_for_this_doi):
                         full_sci_hub_url_for_html_page = f"{current_mirror_base_url}{doi}"
                         mirror_status_str = "FALLO"
@@ -1389,6 +1275,7 @@ def download_pdfs_from_file(config, queue, cancel_event):
                         overall_doi_status = "FALTANTE"
                         failed_articles_data.append({**original_row_data, 'Failure_Reason': temp_failure_reason_for_log, 'Detailed_Status': temp_detailed_status_for_log, 'original_index': index})
 
+                    queue.put({'type': 'set_cursor', 'value': ''}) # Reset cursor
                     format_and_log_article_status(original_row_data, doi, effective_title, current_article_num_for_log, total_articles, successful_downloads, mirror_attempts_details_for_doi, overall_doi_status, user_inter_doi_delay, failed_articles_data_len=len(failed_articles_data))
 
                     log_entry_failure_reason = temp_failure_reason_for_log if not download_successful_this_doi else ""
@@ -1464,6 +1351,8 @@ def download_pdfs_from_file(config, queue, cancel_event):
             pdf_content_retry = None; retry_successful_this_doi = False; successful_mirror_for_retry = ""
             temp_detailed_status_for_retry_log = ""; temp_failure_reason_for_retry_log = ""
             retry_start_time_actual_attempt = datetime.now()
+
+            queue.put({'type': 'set_cursor', 'value': 'watch'})
             for mirror_idx_retry, current_mirror_base_url_retry in enumerate(mirrors_for_retry):
                 full_sci_hub_url_for_html_page_retry = f"{current_mirror_base_url_retry}{doi_to_retry}"
                 mirror_status_str_retry = "FALLO"; mirror_reason_str_retry = ""
@@ -1587,6 +1476,8 @@ def download_pdfs_from_file(config, queue, cancel_event):
                         item['Failure_Reason'] = temp_failure_reason_for_retry_log
                         item['Detailed_Status'] = temp_detailed_status_for_retry_log
                         break
+
+            queue.put({'type': 'set_cursor', 'value': ''}) # Reset cursor
             format_and_log_article_status(failed_article_entry, doi_to_retry, effective_title_for_retry, current_article_num_for_log_retry, total_articles, successful_downloads, mirror_attempts_details_for_retry, overall_retry_status, user_inter_doi_delay, is_retry=True, failed_articles_data_len=len(temp_failed_articles_data_for_iteration) - retry_idx)
 
             # Update the Excel report after the retry attempt

@@ -1,5 +1,120 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import filedialog, messagebox, simpledialog, scrolledtext
+
+class ConfigurationGUI:
+    def __init__(self, master):
+        self.master = master
+        master.title("Configuración de Sci-Hub Downloader")
+        master.geometry("600x450")
+
+        self.config = {}
+        self.cancelled = True
+
+        # Frame principal
+        main_frame = tk.Frame(master, padx=10, pady=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # --- Rutas de archivos ---
+        paths_frame = tk.LabelFrame(main_frame, text="Rutas de Archivos", padx=10, pady=10)
+        paths_frame.pack(fill=tk.X, pady=5)
+
+        self.input_path = tk.StringVar()
+        self.zip_path = tk.StringVar()
+        self.report_path = tk.StringVar()
+
+        tk.Label(paths_frame, text="Archivo de DOIs (Excel/CSV):").grid(row=0, column=0, sticky=tk.W, pady=2)
+        tk.Entry(paths_frame, textvariable=self.input_path, width=50).grid(row=0, column=1, padx=5)
+        tk.Button(paths_frame, text="...", command=self.browse_input_file).grid(row=0, column=2)
+
+        tk.Label(paths_frame, text="Guardar ZIP en:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        tk.Entry(paths_frame, textvariable=self.zip_path, width=50).grid(row=1, column=1, padx=5)
+        tk.Button(paths_frame, text="...", command=self.browse_zip_file).grid(row=1, column=2)
+
+        tk.Label(paths_frame, text="Guardar Reporte Excel en:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        tk.Entry(paths_frame, textvariable=self.report_path, width=50).grid(row=2, column=1, padx=5)
+        tk.Button(paths_frame, text="...", command=self.browse_report_file).grid(row=2, column=2)
+
+        # --- Configuraciones de Retraso ---
+        delays_frame = tk.LabelFrame(main_frame, text="Retrasos (segundos)", padx=10, pady=10)
+        delays_frame.pack(fill=tk.X, pady=5)
+
+        self.inter_doi_delay = tk.StringVar(value=str(INTER_DOI_DELAY_SECONDS))
+        self.mirror_switch_delay = tk.StringVar(value=str(MIRROR_SWITCH_DELAY_SECONDS))
+
+        tk.Label(delays_frame, text="Retraso entre DOIs:").pack(side=tk.LEFT, padx=5)
+        tk.Entry(delays_frame, textvariable=self.inter_doi_delay, width=5).pack(side=tk.LEFT)
+
+        tk.Label(delays_frame, text="Retraso al cambiar de mirror:").pack(side=tk.LEFT, padx=(20, 5))
+        tk.Entry(delays_frame, textvariable=self.mirror_switch_delay, width=5).pack(side=tk.LEFT)
+
+        # --- Mirrors de Sci-Hub ---
+        mirrors_frame = tk.LabelFrame(main_frame, text="Mirrors de Sci-Hub (separados por coma)", padx=10, pady=10)
+        mirrors_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        self.mirrors_text = scrolledtext.ScrolledText(mirrors_frame, wrap=tk.WORD, height=5)
+        self.mirrors_text.pack(fill=tk.BOTH, expand=True)
+        self.mirrors_text.insert(tk.END, ",".join(DEFAULT_SCI_HUB_MIRRORS_EXAMPLE))
+
+        # --- Botones de Acción ---
+        buttons_frame = tk.Frame(main_frame)
+        buttons_frame.pack(fill=tk.X, pady=10)
+
+        tk.Button(buttons_frame, text="Iniciar Proceso", command=self.start_process, bg="green", fg="white").pack(side=tk.RIGHT, padx=5)
+        tk.Button(buttons_frame, text="Cancelar", command=self.cancel_process).pack(side=tk.RIGHT)
+
+    def browse_input_file(self):
+        path = filedialog.askopenfilename(title="Seleccionar archivo con DOIs", filetypes=(("Archivos Excel", "*.xlsx *.xls"), ("Archivos CSV", "*.csv"), ("Todos los archivos", "*.*")))
+        if path:
+            self.input_path.set(path)
+
+    def browse_zip_file(self):
+        path = filedialog.asksaveasfilename(title="Guardar archivo ZIP como...", defaultextension=".zip", filetypes=(("Archivos ZIP", "*.zip"),))
+        if path:
+            self.zip_path.set(path)
+
+    def browse_report_file(self):
+        path = filedialog.asksaveasfilename(title="Guardar Reporte Excel como...", defaultextension=".xlsx", filetypes=(("Archivos Excel", "*.xlsx"),))
+        if path:
+            self.report_path.set(path)
+
+    def start_process(self):
+        input_file = self.input_path.get()
+        zip_file = self.zip_path.get()
+
+        if not input_file or not zip_file:
+            messagebox.showerror("Error", "Debe especificar la ruta del archivo de entrada y del archivo ZIP de salida.")
+            return
+
+        try:
+            inter_doi = int(self.inter_doi_delay.get())
+            mirror_switch = int(self.mirror_switch_delay.get())
+            if inter_doi < 0 or mirror_switch < 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Error", "Los valores de retraso deben ser números enteros no negativos.")
+            return
+
+        mirrors = [m.strip() for m in self.mirrors_text.get("1.0", tk.END).split(',') if m.strip()]
+        if not mirrors:
+            messagebox.showerror("Error", "Debe especificar al menos un mirror de Sci-Hub.")
+            return
+
+        self.config = {
+            "input_file_path": input_file,
+            "zip_path": zip_file,
+            "excel_report_path": self.report_path.get(),
+            "user_inter_doi_delay": inter_doi,
+            "user_mirror_switch_delay": mirror_switch,
+            "user_defined_mirrors": mirrors,
+        }
+        self.cancelled = False
+        self.master.destroy()
+
+    def cancel_process(self):
+        self.cancelled = True
+        self.master.destroy()
+
+
 # import tkinter.scrolledtext as st # GUI logging disabled
 import pandas as pd
 import requests
@@ -1041,7 +1156,7 @@ def download_from_pmc(doi, title, session): # Renamed from download_from_pmc_fix
 def print_to_console(message, orig_stdout):
     print(message, file=orig_stdout)
 
-def download_pdfs_from_file():
+def download_pdfs_from_file(config):
     # WebDriver will be initialized here
     driver = None  # Initialize driver to None
     try:
@@ -1069,75 +1184,24 @@ def download_pdfs_from_file():
     # All print statements will go to the original stdout (console).
 
     try:
-        # Since GUI dialogs are used, we still need a root Tk window for them,
-        # but it can be managed more minimally if no log window is tied to it.
-        # For now, assuming dialogs are essential and keeping root.
-        root = tk.Tk()
-        root.withdraw() # Keep it hidden as it's mainly for dialogs
+        # --- CONFIGURATION FROM GUI ---
+        input_file_path = config["input_file_path"]
+        zip_path = config["zip_path"]
+        excel_report_path_config = config["excel_report_path"]
+        user_inter_doi_delay = config["user_inter_doi_delay"]
+        user_mirror_switch_delay = config["user_mirror_switch_delay"]
+        raw_mirrors_from_gui = config["user_defined_mirrors"]
 
-        print("DIAG: --- Iniciando Configuración ---") # No longer using print_to_console
-        input_file_path = filedialog.askopenfilename(title="Seleccionar archivo con DOIs (Excel o CSV)", filetypes=(("Archivos Excel", "*.xlsx *.xls"), ("Archivos CSV", "*.csv"), ("Todos los archivos", "*.*")))
-        print(f"DIAG: After input_file_path dialog, path: {input_file_path}")
-        if not input_file_path: messagebox.showinfo("Información", "No se seleccionó ningún archivo de entrada. El programa terminará."); return
-        print("DIAG: Before zip_path dialog")
-        zip_path = filedialog.asksaveasfilename(title="Guardar archivo ZIP como...", defaultextension=".zip", filetypes=(("Archivos ZIP", "*.zip"), ("Todos los archivos", "*.*")))
-        print(f"DIAG: After zip_path dialog, path: {zip_path}")
-        if not zip_path: messagebox.showinfo("Información", "No se especificó la ubicación para guardar el ZIP. El programa terminará."); return
-        print("DIAG: Before excel_report_path_config dialog")
-        excel_report_path_config = filedialog.asksaveasfilename(title="Guardar Reporte Excel Opcional como...", defaultextension=".xlsx", initialfile="SciHub_Descarga_Reporte.xlsx", filetypes=(("Archivos Excel", "*.xlsx"), ("Todos los archivos", "*.*")))
-        print(f"DIAG: After excel_report_path_config dialog, path: {excel_report_path_config}")
-        if not excel_report_path_config: excel_report_path_config = ""; print("DIAG: Ruta para reporte Excel no especificada.")
-        print("DIAG: Before user_inter_doi_delay dialog")
-        user_inter_doi_delay = simpledialog.askinteger("Configurar Retraso Inter-DOI", "Ingrese el tiempo de espera (segundos) entre cada DOI:", initialvalue=INTER_DOI_DELAY_SECONDS, minvalue=0 )
-        print(f"DIAG: After user_inter_doi_delay dialog, value: {user_inter_doi_delay}")
-        if user_inter_doi_delay is None: user_inter_doi_delay = INTER_DOI_DELAY_SECONDS; messagebox.showinfo("Información", f"Retraso Inter-DOI no modificado, se usará el predeterminado: {user_inter_doi_delay}s")
-        print("DIAG: Before user_mirror_switch_delay dialog")
-        user_mirror_switch_delay = simpledialog.askinteger("Configurar Retraso Cambio de Mirror", "Ingrese el tiempo de espera (segundos) al cambiar de mirror:", initialvalue=MIRROR_SWITCH_DELAY_SECONDS, minvalue=0)
-        print(f"DIAG: After user_mirror_switch_delay dialog, value: {user_mirror_switch_delay}")
-        if user_mirror_switch_delay is None: user_mirror_switch_delay = MIRROR_SWITCH_DELAY_SECONDS; messagebox.showinfo("Información", f"Retraso por cambio de Mirror no modificado, se usará el predeterminado: {user_mirror_switch_delay}s")
-        print("DIAG: Before user_mirror_list_str dialog")
-        # Use DEFAULT_SCI_HUB_MIRRORS_EXAMPLE to pre-fill the dialog
-        initial_mirrors_str = ",".join(DEFAULT_SCI_HUB_MIRRORS_EXAMPLE)
-        user_mirror_list_str = simpledialog.askstring(
-            "Configurar Mirrors de Sci-Hub",
-            "Mirrors de Sci-Hub (separados por coma):\nSe pre-cargan los valores por defecto. Puede editarlos.\nEstos serán los únicos mirrors utilizados.",
-            initialvalue=initial_mirrors_str
-        )
-        print(f"DIAG: After user_mirror_list_str dialog, value: {user_mirror_list_str}")
         user_defined_mirrors = []
-        if user_mirror_list_str is None: messagebox.showerror("Configuración Requerida", "Configuración de mirrors cancelada. Terminando."); return
-        # If the user clears the dialog, user_mirror_list_str will be empty.
-        # In this case, we can fall back to the default list or handle as an error.
-        # For now, let's assume an empty string means the user wants no mirrors, which should be an error or handled.
-        # The existing logic handles empty strip by defaulting to a single mirror, let's refine this.
-        if not user_mirror_list_str.strip():
-            # If user explicitly deleted all mirrors, it's likely an error or they want to cancel.
-            # However, the old logic defaulted to "https://sci-hub.se/".
-            # To maintain consistency while using the new default, let's use DEFAULT_SCI_HUB_MIRRORS_EXAMPLE if empty.
-            messagebox.showinfo("Información de Mirrors", f"No se ingresaron mirrors o se borraron. Usando defaults: {initial_mirrors_str}")
-            user_defined_mirrors = list(DEFAULT_SCI_HUB_MIRRORS_EXAMPLE) # Use a copy
-        else:
-            raw_mirrors = [mirror.strip() for mirror in user_mirror_list_str.split(',') if mirror.strip()]
-            for mirror_url in raw_mirrors:
-                if not mirror_url.startswith(("http://", "https://")): mirror_url = "https://" + mirror_url 
-                if not mirror_url.endswith('/'): mirror_url += '/'
-                user_defined_mirrors.append(mirror_url)
-            if not user_defined_mirrors: # This case should ideally be covered by the empty string check above.
-                                         # If raw_mirrors is empty due to invalid input (e.g. just commas), then error.
-                messagebox.showerror("Error de Configuración", "Lista de mirrors vacía o inválida después del procesamiento. Terminando.")
-                return
-        # sci_hub_base_url_for_report should be set only if user_defined_mirrors is not empty.
-        # The previous logic would error if user_defined_mirrors was empty here.
-        # The modified logic above tries to ensure user_defined_mirrors has defaults if input is empty.
+        for mirror_url in raw_mirrors_from_gui:
+            if not mirror_url.startswith(("http://", "https://")):
+                mirror_url = "https://" + mirror_url
+            if not mirror_url.endswith('/'):
+                mirror_url += '/'
+            user_defined_mirrors.append(mirror_url)
+
         sci_hub_base_url_for_report = user_defined_mirrors[0] if user_defined_mirrors else "N/A"
-
-
-        # print_to_console("DIAG: Before root.update() after all dialogs.", original_stdout); root.update(); print_to_console("DIAG: After root.update() after all dialogs.", original_stdout) # GUI logging disabled
-        # print_to_console("DIAG: All dialogs complete. Before log_window creation.", original_stdout); log_window = tk.Toplevel(root); print_to_console("DIAG: After log_window = tk.Toplevel(root)", original_stdout) # GUI logging disabled
-        # log_window.title("Log de Proceso de Descarga"); log_window.geometry("800x600") # GUI logging disabled
-        # print_to_console("DIAG: Before log_text_widget creation", original_stdout); log_text_widget = st.ScrolledText(log_window, wrap=tk.WORD, state='disabled'); log_text_widget.pack(padx=10, pady=10, fill=tk.BOTH, expand=True); print_to_console("DIAG: After log_text_widget creation", original_stdout) # GUI logging disabled
-        # log_window.protocol("WM_DELETE_WINDOW", lambda: on_log_window_close(log_window, original_stdout, root)) # GUI logging disabled
-        # print_to_console("DIAG: Before sys.stdout redirection", original_stdout); sys.stdout = TextRedirector(log_text_widget, original_stdout) ; print_to_console("DIAG: After sys.stdout redirection. Subsequent app prints go to GUI and console.", original_stdout) # GUI logging disabled
+        # --- END OF CONFIGURATION ---
         
         print("\n--- Configuración Aplicada ---")
         print(f"Archivo de entrada: {input_file_path}")
@@ -1664,23 +1728,14 @@ def download_pdfs_from_file():
 
 
 if __name__ == "__main__":
-    # Store the true original stdout at the very beginning if not already done for the main function
-    # This is a fallback if download_pdfs_from_file itself had an issue before original_stdout was set.
-    # However, original_stdout inside download_pdfs_from_file should be sys.__stdout__ if not redirected.
-    # The check `isinstance(sys.stdout, TextRedirector)` is no longer relevant if TextRedirector is removed.
+    root = tk.Tk()
+    gui = ConfigurationGUI(root)
+    root.mainloop()
 
-    # The critical part is ensuring sys.stdout is sys.__stdout__ if it got changed.
-    # Since TextRedirector is commented out, sys.stdout should not be an instance of it.
-    # The `finally` block in `download_pdfs_from_file` now tries to restore original_stdout.
-    # A final check here could be made, but might be redundant if `download_pdfs_from_file` handles it.
-
-    # Safest is to assume download_pdfs_from_file cleans up its own stdout if it changed it.
-    # If TextRedirector and its instantiation are fully removed, sys.stdout should remain as console.
-    download_pdfs_from_file()
-    # No need to check for TextRedirector instance if it's removed.
-    # if isinstance(sys.stdout, TextRedirector) and hasattr(sys.stdout, 'original_stdout'):
-    #    sys.stdout = sys.stdout.original_stdout # Restore if it was a TextRedirector
-    # elif isinstance(sys.stdout, TextRedirector): # Fallback if original_stdout attribute missing
-    #    sys.stdout = sys.__stdout__
+    if not gui.cancelled:
+        config = gui.config
+        download_pdfs_from_file(config)
+    else:
+        print("Proceso cancelado por el usuario.")
 
     print("\nScript finalizado.")

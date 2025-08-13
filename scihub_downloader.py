@@ -1013,6 +1013,25 @@ def download_from_pmc(doi, title, session):
 def print_to_console(message, orig_stdout):
     print(message, file=orig_stdout)
 
+def get_general_source_name(source_string):
+    source_lower = source_string.lower()
+    if "sci-hub" in source_lower:
+        return "Sci-Hub"
+    if "google scholar" in source_lower:
+        return "Google Scholar"
+    if "pmc" in source_lower or "pubmed" in source_lower:
+        return "PubMed Central"
+
+    # Fallback to extract domain
+    try:
+        domain_match = re.search(r'https?://(?:www\.)?([a-zA-Z0-9.-]+)(?:/|$)', source_string)
+        if domain_match:
+            return domain_match.group(1)
+    except Exception:
+        pass
+
+    return "Otro"
+
 def write_excel_report(excel_path, successful_data, failed_data, all_logs, original_columns, base_scihub_url, queue):
     if not excel_path:
         return
@@ -1297,13 +1316,7 @@ def download_pdfs_from_file(config, queue):
                     if download_successful_this_doi and pdf_content:
                         successful_downloads += 1
 
-                        source_name = successful_mirror_for_this_doi
-                        if "sci-hub" in source_name.lower():
-                            try:
-                                domain_match = re.search(r'https?://(?:www\.)?([a-zA-Z0-9.-]+)(?:/|$)', source_name)
-                                source_name = domain_match.group(1) if domain_match else source_name
-                            except Exception:
-                                pass
+                        source_name = get_general_source_name(successful_mirror_for_this_doi)
                         source_stats[source_name] = source_stats.get(source_name, 0) + 1
                         queue.put({'type': 'source_stat', 'stats': source_stats})
 
@@ -1473,13 +1486,7 @@ def download_pdfs_from_file(config, queue):
             if retry_successful_this_doi and pdf_content_retry:
                 successful_downloads += 1
 
-                source_name_retry = successful_mirror_for_retry
-                if "sci-hub" in source_name_retry.lower():
-                    try:
-                        domain_match = re.search(r'https?://(?:www\.)?([a-zA-Z0-9.-]+)(?:/|$)', source_name_retry)
-                        source_name_retry = domain_match.group(1) if domain_match else source_name_retry
-                    except Exception:
-                        pass
+                source_name_retry = get_general_source_name(successful_mirror_for_retry)
                 source_stats[source_name_retry] = source_stats.get(source_name_retry, 0) + 1
                 queue.put({'type': 'source_stat', 'stats': source_stats})
 

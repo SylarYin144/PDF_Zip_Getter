@@ -356,23 +356,10 @@ def _get_display_text_for_article(row_data, current_num, total_articles, prefix=
     return f"{article_progress_str}\n{title_str}\n{doi_str}"
 
 def _try_download_methods(context, original_row_data, mirrors_to_try):
-    # This helper centralizes the download attempts for a single article
-    # Returns (pdf_content, successful_mirror, detailed_status, failure_reason)
-    pass # Omitted for brevity
+    pass # Placeholder
 
 def _process_article(context, original_row_data, zf, index, total_articles_in_run):
-    # Unpack context
-    queue = context['queue']
-    # ... and many more ...
-
-    # This function now contains the core logic for processing a single article.
-    # It's called by both strategies.
-
-    # ... (logic from the old loop body) ...
-    # ... It calls _try_download_methods, updates context lists, saves to zip, etc. ...
-
-    # Returns True on success, False on failure
-    return True # Placeholder
+    pass # Placeholder
 
 def _strategy_article_first(context):
     with zipfile.ZipFile(context['zip_path'], 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -381,13 +368,10 @@ def _strategy_article_first(context):
                 print_to_console("Proceso cancelado por el usuario.", context['original_stdout'])
                 break
             _process_article(context, row.to_dict(), zf, index, context['total_articles'])
-    # Retry logic is now handled by the final report generation.
     pass
 
 def _strategy_mirror_first(context):
-    # ... (Real implementation will go here) ...
     print_to_console("Estrategia 'Mirror por Mirror' AÚN NO ESTÁ COMPLETAMENTE IMPLEMENTADA.", context['original_stdout'])
-    # Fallback to article_first for now
     _strategy_article_first(context)
 
 def download_pdfs_from_file(config, queue, cancel_event):
@@ -438,13 +422,11 @@ def download_pdfs_from_file(config, queue, cancel_event):
     download_strategy = config.get("download_strategy", "article_first")
     print_to_console(f"Iniciando proceso con estrategia: {download_strategy}", original_stdout)
 
-    # This is where the strategies are called.
     if download_strategy == 'mirror_first':
         _strategy_mirror_first(context)
     else:
         _strategy_article_first(context)
 
-    # Final report generation is now common to both strategies
     successful_dois = {str(item.get('DOI', item.get('doi', ''))).strip() for item in context['successful_articles_data']}
     doi_col_name = 'DOI' if 'DOI' in df.columns else 'doi'
     df[doi_col_name] = df[doi_col_name].astype(str).str.strip()

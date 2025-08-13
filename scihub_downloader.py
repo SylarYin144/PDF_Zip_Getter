@@ -1300,32 +1300,32 @@ def download_pdfs_from_file(config, queue):
                 original_row_data = row.to_dict()
                 start_time = datetime.now()
                 doi = str(original_row_data.get('DOI', original_row_data.get('doi', ''))).strip()
-                    title = str(original_row_data.get('Title', original_row_data.get('title', ''))).strip()
-                    effective_title = title if title else doi
-                    
-                    current_article_num_for_log = index + 1
-                    mirror_attempts_details_for_doi = []
-                    overall_doi_status = "FALTANTE" # Default status
+                title = str(original_row_data.get('Title', original_row_data.get('title', ''))).strip()
+                effective_title = title if title else doi
 
-                    if not doi:
-                        # ... (skip logic as before, but use local vars for log call)
-                        # NOTE: The initial print block should be SKIPPED if DOI is empty.
-                        # The existing 'continue' handles this.
-                        failure_reason_for_report = "DOI vacío"; detailed_status_for_log = "Skipped_DOI_Missing"
-                        overall_doi_status = "FALTANTE (DOI Vacío)"
-                        # Call format_and_log_article_status here for skipped DOI
-                        # successful_downloads count doesn't change for skipped
-                        format_and_log_article_status(original_row_data, doi, effective_title, current_article_num_for_log, total_articles, successful_downloads, mirror_attempts_details_for_doi, overall_doi_status, user_inter_doi_delay)
-                        end_time = datetime.now() # Ensure end_time for log
-                        log_entry = {**original_row_data, 'Start_Time': start_time.strftime("%Y-%m-%d %H:%M:%S"), 'End_Time': end_time.strftime("%Y-%m-%d %H:%M:%S"), 'Duration_Seconds': (end_time - start_time).total_seconds(), 'Detailed_Status': detailed_status_for_log, 'Failure_Reason': failure_reason_for_report, 'Successful_Mirror': ""}
-                        all_articles_log.append(log_entry); failed_articles_data.append({**original_row_data, 'Failure_Reason': failure_reason_for_report, 'Detailed_Status': detailed_status_for_log, 'original_index': index})
-                        # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
-                        # Separator after logging for a skipped DOI
-                        print_to_console("===============================================================================================", original_stdout)
-                        time.sleep(user_inter_doi_delay) # Still sleep for skipped
-                        continue
-                    
-                    pdf_filename_in_zip = clean_filename(effective_title)[:150] + ".pdf"
+                current_article_num_for_log = index + 1
+                mirror_attempts_details_for_doi = []
+                overall_doi_status = "FALTANTE" # Default status
+
+                if not doi:
+                    # ... (skip logic as before, but use local vars for log call)
+                    # NOTE: The initial print block should be SKIPPED if DOI is empty.
+                    # The existing 'continue' handles this.
+                    failure_reason_for_report = "DOI vacío"; detailed_status_for_log = "Skipped_DOI_Missing"
+                    overall_doi_status = "FALTANTE (DOI Vacío)"
+                    # Call format_and_log_article_status here for skipped DOI
+                    # successful_downloads count doesn't change for skipped
+                    format_and_log_article_status(original_row_data, doi, effective_title, current_article_num_for_log, total_articles, successful_downloads, mirror_attempts_details_for_doi, overall_doi_status, user_inter_doi_delay)
+                    end_time = datetime.now() # Ensure end_time for log
+                    log_entry = {**original_row_data, 'Start_Time': start_time.strftime("%Y-%m-%d %H:%M:%S"), 'End_Time': end_time.strftime("%Y-%m-%d %H:%M:%S"), 'Duration_Seconds': (end_time - start_time).total_seconds(), 'Detailed_Status': detailed_status_for_log, 'Failure_Reason': failure_reason_for_report, 'Successful_Mirror': ""}
+                    all_articles_log.append(log_entry); failed_articles_data.append({**original_row_data, 'Failure_Reason': failure_reason_for_report, 'Detailed_Status': detailed_status_for_log, 'original_index': index})
+                    # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
+                    # Separator after logging for a skipped DOI
+                    print_to_console("===============================================================================================", original_stdout)
+                    time.sleep(user_inter_doi_delay) # Still sleep for skipped
+                    continue
+
+                pdf_filename_in_zip = clean_filename(effective_title)[:150] + ".pdf"
 
                     
                     mirrors_to_try_for_this_doi = list(user_defined_mirrors)

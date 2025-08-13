@@ -1184,23 +1184,7 @@ def print_to_console(message, orig_stdout):
     print(message, file=orig_stdout)
 
 def download_pdfs_from_file():
-    # WebDriver will be initialized here
     driver = None  # Initialize driver to None
-    try:
-        options = webdriver.ChromeOptions()
-        options.add_argument('--headless')
-        options.add_argument('--disable-gpu')  # Recommended for headless
-        options.add_argument('--no-sandbox') # Often needed in restricted environments
-        options.add_argument('--disable-dev-shm-usage') # Often needed in restricted environments
-        # Optional: Set a common user agent for Selenium if needed, though browser's default is usually fine
-        # options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-        print("Inicializando WebDriver de Selenium en modo headless...")
-        driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
-        print("WebDriver de Selenium inicializado correctamente.")
-    except Exception as e:
-        print(f"Error al inicializar WebDriver de Selenium: {e}")
-        print("Las descargas basadas en Selenium se omitirán.")
-        driver = None # Ensure driver is None if initialization fails
     original_stdout = sys.stdout 
     # root = tk.Tk(); root.withdraw() # GUI elements removed
     # log_window = None; log_text_widget = None # GUI elements removed
@@ -1252,6 +1236,22 @@ def download_pdfs_from_file():
 
         sci_hub_base_url_for_report = user_defined_mirrors[0]
 
+        # Initialize WebDriver here, after getting configuration
+        try:
+            options = webdriver.ChromeOptions()
+            options.add_argument('--headless')
+            options.add_argument('--disable-gpu')  # Recommended for headless
+            options.add_argument('--no-sandbox') # Often needed in restricted environments
+            options.add_argument('--disable-dev-shm-usage') # Often needed in restricted environments
+            # Optional: Set a common user agent for Selenium if needed
+            # options.add_argument("user-agent=...")
+            print("Inicializando WebDriver de Selenium en modo headless...")
+            driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
+            print("WebDriver de Selenium inicializado correctamente.")
+        except Exception as e:
+            print(f"Error al inicializar WebDriver de Selenium: {e}")
+            print("Las descargas basadas en Selenium se omitirán.")
+            driver = None # Ensure driver is None if initialization fails
 
         # print_to_console("DIAG: Before root.update() after all dialogs.", original_stdout); root.update(); print_to_console("DIAG: After root.update() after all dialogs.", original_stdout) # GUI logging disabled
         # print_to_console("DIAG: All dialogs complete. Before log_window creation.", original_stdout); log_window = tk.Toplevel(root); print_to_console("DIAG: After log_window = tk.Toplevel(root)", original_stdout) # GUI logging disabled

@@ -207,7 +207,12 @@ class ConfigurationGUI:
                         self.pbar_found_of_searched_label_var.set(f"{found}/{searched} ({found_of_searched_perc:.2f}%)")
 
                     # Bar 3
+                    failed = searched - found
+                    # The maximum potential success is total articles minus the ones that have already failed.
+                    max_possible_success = self.total_articles - failed
+                    self.pbar_found_of_total['maximum'] = max_possible_success if max_possible_success > 0 else 1
                     self.pbar_found_of_total['value'] = found
+                    # The label remains truthful to the absolute numbers.
                     found_of_total_perc = (found / self.total_articles) * 100
                     self.pbar_found_of_total_label_var.set(f"{found}/{self.total_articles} ({found_of_total_perc:.2f}%)")
 
@@ -225,7 +230,6 @@ class ConfigurationGUI:
 
             elif message['type'] == 'time_update':
                 self.eta_label_var.set(message['value']['eta'])
-                self.elapsed_time_var.set(message['value']['elapsed'])
                 self.avg_time_var.set(message['value']['avg'])
 
             elif message['type'] == 'source_stat':
@@ -262,8 +266,28 @@ class ConfigurationGUI:
         self.working_indicator_var.set(f"Procesando{dots}")
         self.master.after(500, lambda: self.animate_working_indicator(counter + 1))
 
+    def update_elapsed_time(self):
+        if not self.is_processing:
+            return
+
+        elapsed_seconds = time.time() - self.process_start_time
+
+        mins, secs = divmod(elapsed_seconds, 60)
+        hours, mins = divmod(mins, 60)
+
+        if hours > 0:
+            elapsed_string = f"{int(hours)}h {int(mins)}m {int(secs)}s"
+        elif mins > 0:
+            elapsed_string = f"{int(mins)}m {int(secs)}s"
+        else:
+            elapsed_string = f"{int(secs)}s"
+
+        self.elapsed_time_var.set(elapsed_string)
+
+        self.master.after(1000, self.update_elapsed_time)
+
     def browse_input_file(self):
-        path = filedialog.askopenfilename(title="Seleccionar archivo con DOIs", filetypes=(("Archivos Excel", "*.xlsx *.xls"), ("Archivos CSV", "*.csv"), ("Todos los archivos", "*.*")))
+        path = filedialog.askopenfilename(title="Seleccionar archivo con DOIs", filetypes=(("Excel & CSV", "*.xlsx *.xls *.csv"), ("Archivos Excel", "*.xlsx *.xls"), ("Archivos CSV", "*.csv"), ("Todos los archivos", "*.*")))
         if path:
             self.input_path.set(path)
 
@@ -329,9 +353,11 @@ class ConfigurationGUI:
         )
         self.worker_thread.start()
 
-        # Start polling the queue and animation
+        # Start polling the queue, timer, and animation
         self.is_processing = True
+        self.process_start_time = time.time()
         self.master.after(100, self.process_queue)
+        self.update_elapsed_time()
         self.animate_working_indicator()
 
     def cancel_process(self):
@@ -1017,8 +1043,8 @@ def write_excel_report(excel_path, successful_data, failed_data, all_logs, origi
         df_tiempos = create_ordered_df(all_logs, ti_cols)
 
         with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
-            df_obtenidos.to_excel(writer, sheet_name='Obtenidos', index=False)
             df_fallidos.to_excel(writer, sheet_name='Fallidos', index=False)
+            df_obtenidos.to_excel(writer, sheet_name='Obtenidos', index=False)
             df_tiempos.to_excel(writer, sheet_name='Tiempos', index=False)
     except Exception as e:
         # Using print here because this function might be called where the queue is not available
@@ -1354,7 +1380,6 @@ def download_pdfs_from_file(config, queue, cancel_event):
 
                         time_update_payload = {
                             'eta': eta_string,
-                            'elapsed': elapsed_string,
                             'avg': avg_string
                         }
                         queue.put({'type': 'time_update', 'value': time_update_payload})
@@ -1538,28 +1563,48 @@ def download_pdfs_from_file(config, queue, cancel_event):
             if retry_idx < len(temp_failed_articles_data_for_iteration) - 1:
                 time.sleep(user_inter_doi_delay)
 
-        if articles_successfully_retried_ids:
-            failed_articles_data = [item for item in failed_articles_data if str(item.get('DOI', item.get('doi', ''))).strip() not in articles_successfully_retried_ids]
+        # --- Final Report Generation ---
+        # At this point, regardless of cancellation, we calculate the final lists.
 
-        failed_downloads_summary_list = [{'title': str(item.get('Title','N/A')).strip(), 'doi': str(item.get('DOI','N/A')).strip(), 'reason': str(item.get('Failure_Reason','N/A')).strip()} for item in failed_articles_data]
+        # Get a set of all successfully downloaded DOIs
+        successful_dois = {str(item.get('DOI', item.get('doi', ''))).strip() for item in successful_articles_data}
+
+        # The original DataFrame 'df' has all articles. We filter it to find the ones that did not succeed.
+        # We need to handle the case where the DOI column name might be 'doi' or 'DOI'
+        doi_col_name = 'DOI' if 'DOI' in df.columns else 'doi'
+        df[doi_col_name] = df[doi_col_name].astype(str).str.strip() # Ensure consistent formatting
+
+        final_failed_df = df[~df[doi_col_name].isin(successful_dois)]
+        final_failed_articles_data = final_failed_df.to_dict('records')
+
+        # Add a reason for failure for these newly calculated failed articles
+        for item in final_failed_articles_data:
+            item['Failure_Reason'] = item.get('Failure_Reason', 'No descargado (proceso cancelado o no alcanzado)')
+            item['Detailed_Status'] = item.get('Detailed_Status', 'Not Attempted or Cancelled')
+
+        # Write the final, definitive Excel report
+        write_excel_report(excel_report_path_config, successful_articles_data, final_failed_articles_data, all_articles_log, original_input_columns, sci_hub_base_url_for_report, queue)
+
         total_mb = total_downloaded_size_bytes / (1024 * 1024)
 
-        summary_message = (f"Proceso completado.\n\nDescargas exitosas: {successful_downloads}\nDescargas fallidas: {len(failed_downloads_summary_list)}\n" f"Tamaño total PDFs: {total_mb:.2f} MB")
-        if failed_downloads_summary_list:
-            summary_message += "\n\nArtículos no descargados (post-reintentos):"
-            for item in failed_downloads_summary_list:
-                summary_message += f"\n- Título: {item['title']}, DOI: {item['doi']}, Razón: {item['reason']}"
+        summary_message = (f"Proceso completado.\n\nDescargas exitosas: {successful_downloads}\nDescargas fallidas: {len(final_failed_articles_data)}\n" f"Tamaño total PDFs: {total_mb:.2f} MB")
+        if final_failed_articles_data:
+            summary_message += "\n\nArtículos no descargados (final):"
+            # Create a simple list for the summary message
+            failed_summary = [{'title': str(item.get('Title','N/A')).strip(), 'doi': str(item.get('DOI','N/A')).strip()} for item in final_failed_articles_data]
+            for item in failed_summary[:10]: # Show up to 10 for brevity
+                summary_message += f"\n- Título: {item['title']}, DOI: {item['doi']}"
+            if len(failed_summary) > 10:
+                summary_message += f"\n... y {len(failed_summary) - 10} más (ver reporte Excel)."
 
         print("\n" + "="*50); print(summary_message); print("="*50);
 
-        # The final report is now written after every step, so this final block is redundant.
-        # However, we can keep a final print message.
         if excel_report_path_config:
             print(f"Reporte Excel final guardado en: {excel_report_path_config}")
         else:
             print("Generación de reporte Excel omitida (ruta no especificada).")
 
-        queue.put({'type': 'done', 'message': f'Completado: {successful_downloads}/{total_articles} artículos descargados.'})
+        queue.put({'type': 'done', 'message': f'Completado: {successful_downloads}/{total_articles} descargados.'})
 
         print("\n" + "="*50)
         print("--- Archivos Generados ---")

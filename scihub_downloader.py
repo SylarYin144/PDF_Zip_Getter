@@ -35,6 +35,7 @@ class ConfigurationGUI:
         self.config = {}
         self.cancel_event = threading.Event()
         self.total_articles = 0
+        self.is_processing = False
 
         main_frame = tk.Frame(master, padx=10, pady=10)
         main_frame.grid(row=0, column=0, sticky="nsew")
@@ -66,7 +67,7 @@ class ConfigurationGUI:
         tk.Entry(paths_frame, textvariable=self.report_path, width=50).grid(row=2, column=1, padx=5, sticky="ew")
         tk.Button(paths_frame, text="...", command=self.browse_report_file).grid(row=2, column=2)
 
-        delays_frame = tk.LabelFrame(self.config_frame, text="Retrasos (segundos)", padx=10, pady=10)
+        delays_frame = tk.LabelFrame(self.config_frame, text="Retrasos y Tiempos (segundos)", padx=10, pady=10)
         delays_frame.grid(row=2, column=0, sticky="ew", pady=5)
 
         search_methods_frame = tk.LabelFrame(self.config_frame, text="Métodos de Búsqueda Adicionales", padx=10, pady=10)
@@ -100,15 +101,17 @@ class ConfigurationGUI:
         mirrors_frame.rowconfigure(0, weight=1)
         mirrors_frame.columnconfigure(0, weight=1)
         self.mirrors_text = scrolledtext.ScrolledText(mirrors_frame, wrap=tk.WORD, height=5)
-        self.mirrors_text.grid(row=0, column=0, sticky="nsew")
+        self.mirrors_text.pack(fill="both", expand=True)
+        self.mirrors_text.insert(tk.END, "https://sci-hub.se/,https://sci-hub.st/")
 
         buttons_frame = tk.Frame(self.config_frame)
         buttons_frame.grid(row=6, column=0, sticky="ew", pady=10)
         self.start_button = tk.Button(buttons_frame, text="Iniciar Proceso", command=self.start_process, bg="green", fg="white")
         self.start_button.pack(side=tk.RIGHT, padx=5)
-        self.cancel_button = tk.Button(buttons_frame, text="Cancelar", command=self.cancel_process)
+        self.cancel_button = tk.Button(buttons_frame, text="Cancelar", command=self.master.destroy)
         self.cancel_button.pack(side=tk.RIGHT)
 
+        # --- Progress Frame ---
         self.progress_view_container = tk.Frame(main_frame)
         self.progress_view_container.columnconfigure(0, weight=1)
         self.progress_view_container.rowconfigure(0, weight=1)
@@ -161,7 +164,6 @@ class ConfigurationGUI:
         self.current_article_text.insert(tk.END, "Iniciando...")
         self.current_article_text.config(state="disabled")
 
-        self.is_processing = False
         self.final_status_label_var = tk.StringVar(value="Proceso en ejecución...")
         status_frame = tk.Frame(progress_content_frame)
         status_frame.grid(row=11, column=0, columnspan=2, sticky="ew")
@@ -233,7 +235,8 @@ class ConfigurationGUI:
                 self.stop_button.config(state="disabled")
                 return
         except Empty: pass
-        self.master.after(100, self.process_queue)
+        if self.is_processing:
+            self.master.after(100, self.process_queue)
 
     def animate_working_indicator(self, counter=0):
         if not self.is_processing:
@@ -298,10 +301,8 @@ class ConfigurationGUI:
         self.animate_working_indicator()
 
     def cancel_process(self):
-        if self.worker_thread and self.worker_thread.is_alive():
+        if messagebox.askyesno("Confirmar", "¿Está seguro de que desea detener el proceso?"):
             self.cancel_event.set()
-            self.worker_thread.join(timeout=2)
-        self.master.destroy()
 
 # --- Constants and Helpers ---
 STANDARD_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36'
@@ -362,17 +363,10 @@ def _process_article(context, original_row_data, zf, index, total_articles_in_ru
     pass # Placeholder
 
 def _strategy_article_first(context):
-    with zipfile.ZipFile(context['zip_path'], 'w', zipfile.ZIP_DEFLATED) as zf:
-        for index, row in context['df'].iterrows():
-            if context['cancel_event'].is_set():
-                print_to_console("Proceso cancelado por el usuario.", context['original_stdout'])
-                break
-            _process_article(context, row.to_dict(), zf, index, context['total_articles'])
     pass
 
 def _strategy_mirror_first(context):
-    print_to_console("Estrategia 'Mirror por Mirror' AÚN NO ESTÁ COMPLETAMENTE IMPLEMENTADA.", context['original_stdout'])
-    _strategy_article_first(context)
+    pass
 
 def download_pdfs_from_file(config, queue, cancel_event):
     driver = None
@@ -427,6 +421,7 @@ def download_pdfs_from_file(config, queue, cancel_event):
     else:
         _strategy_article_first(context)
 
+    # CORRECTLY PLACED FINAL REPORTING LOGIC
     successful_dois = {str(item.get('DOI', item.get('doi', ''))).strip() for item in context['successful_articles_data']}
     doi_col_name = 'DOI' if 'DOI' in df.columns else 'doi'
     df[doi_col_name] = df[doi_col_name].astype(str).str.strip()

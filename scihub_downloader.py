@@ -1295,9 +1295,10 @@ def download_pdfs_from_file(config, queue):
         total_articles = len(df)
         queue.put({'type': 'total', 'value': total_articles})
 
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for index, row in df.iterrows():
-                original_row_data = row.to_dict()
+        try:
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for index, row in df.iterrows():
+                    original_row_data = row.to_dict()
                 start_time = datetime.now()
                 doi = str(original_row_data.get('DOI', original_row_data.get('doi', ''))).strip()
                 title = str(original_row_data.get('Title', original_row_data.get('title', ''))).strip()

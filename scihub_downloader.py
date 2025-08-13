@@ -1,5 +1,7 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog, scrolledtext
+from tkinter import ttk, filedialog, messagebox, simpledialog, scrolledtext
+import threading
+from queue import Queue, Empty
 
 class ConfigurationGUI:
     def __init__(self, master):
@@ -9,13 +11,17 @@ class ConfigurationGUI:
 
         self.config = {}
         self.cancelled = True
+        self.total_articles = 0
 
         # Frame principal
         main_frame = tk.Frame(master, padx=10, pady=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # --- Rutas de archivos ---
-        paths_frame = tk.LabelFrame(main_frame, text="Rutas de Archivos", padx=10, pady=10)
+        # --- Frame de Configuración (visible al inicio) ---
+        self.config_frame = tk.Frame(main_frame)
+        self.config_frame.pack(fill=tk.BOTH, expand=True)
+
+        paths_frame = tk.LabelFrame(self.config_frame, text="Rutas de Archivos", padx=10, pady=10)
         paths_frame.pack(fill=tk.X, pady=5)
 
         self.input_path = tk.StringVar()
@@ -34,8 +40,7 @@ class ConfigurationGUI:
         tk.Entry(paths_frame, textvariable=self.report_path, width=50).grid(row=2, column=1, padx=5)
         tk.Button(paths_frame, text="...", command=self.browse_report_file).grid(row=2, column=2)
 
-        # --- Configuraciones de Retraso ---
-        delays_frame = tk.LabelFrame(main_frame, text="Retrasos (segundos)", padx=10, pady=10)
+        delays_frame = tk.LabelFrame(self.config_frame, text="Retrasos (segundos)", padx=10, pady=10)
         delays_frame.pack(fill=tk.X, pady=5)
 
         self.inter_doi_delay = tk.StringVar(value=str(INTER_DOI_DELAY_SECONDS))
@@ -43,24 +48,97 @@ class ConfigurationGUI:
 
         tk.Label(delays_frame, text="Retraso entre DOIs:").pack(side=tk.LEFT, padx=5)
         tk.Entry(delays_frame, textvariable=self.inter_doi_delay, width=5).pack(side=tk.LEFT)
-
         tk.Label(delays_frame, text="Retraso al cambiar de mirror:").pack(side=tk.LEFT, padx=(20, 5))
         tk.Entry(delays_frame, textvariable=self.mirror_switch_delay, width=5).pack(side=tk.LEFT)
 
-        # --- Mirrors de Sci-Hub ---
-        mirrors_frame = tk.LabelFrame(main_frame, text="Mirrors de Sci-Hub (separados por coma)", padx=10, pady=10)
+        mirrors_frame = tk.LabelFrame(self.config_frame, text="Mirrors de Sci-Hub (separados por coma)", padx=10, pady=10)
         mirrors_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
         self.mirrors_text = scrolledtext.ScrolledText(mirrors_frame, wrap=tk.WORD, height=5)
         self.mirrors_text.pack(fill=tk.BOTH, expand=True)
         self.mirrors_text.insert(tk.END, ",".join(DEFAULT_SCI_HUB_MIRRORS_EXAMPLE))
 
-        # --- Botones de Acción ---
-        buttons_frame = tk.Frame(main_frame)
+        buttons_frame = tk.Frame(self.config_frame)
         buttons_frame.pack(fill=tk.X, pady=10)
 
-        tk.Button(buttons_frame, text="Iniciar Proceso", command=self.start_process, bg="green", fg="white").pack(side=tk.RIGHT, padx=5)
-        tk.Button(buttons_frame, text="Cancelar", command=self.cancel_process).pack(side=tk.RIGHT)
+        self.start_button = tk.Button(buttons_frame, text="Iniciar Proceso", command=self.start_process, bg="green", fg="white")
+        self.start_button.pack(side=tk.RIGHT, padx=5)
+        self.cancel_button = tk.Button(buttons_frame, text="Cancelar", command=self.cancel_process)
+        self.cancel_button.pack(side=tk.RIGHT)
+
+        # --- Frame de Progreso (inicialmente oculto) ---
+        self.progress_frame = tk.Frame(main_frame)
+
+        tk.Label(self.progress_frame, text="Progreso Total (Artículos Buscados):", font="-weight bold").grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
+        self.pbar_searched = ttk.Progressbar(self.progress_frame, length=300)
+        self.pbar_searched.grid(row=1, column=0, sticky=tk.EW, padx=5, pady=(0, 10))
+        self.pbar_searched_label_var = tk.StringVar(value="0/0 (0.00%)")
+        tk.Label(self.progress_frame, textvariable=self.pbar_searched_label_var).grid(row=1, column=1, sticky=tk.W, padx=5)
+
+        tk.Label(self.progress_frame, text="Éxito (Encontrados de Buscados):", font="-weight bold").grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
+        self.pbar_found_of_searched = ttk.Progressbar(self.progress_frame, length=300)
+        self.pbar_found_of_searched.grid(row=3, column=0, sticky=tk.EW, padx=5, pady=(0, 10))
+        self.pbar_found_of_searched_label_var = tk.StringVar(value="0/0 (0.00%)")
+        tk.Label(self.progress_frame, textvariable=self.pbar_found_of_searched_label_var).grid(row=3, column=1, sticky=tk.W, padx=5)
+
+        tk.Label(self.progress_frame, text="Éxito (Encontrados del Total):", font="-weight bold").grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
+        self.pbar_found_of_total = ttk.Progressbar(self.progress_frame, length=300)
+        self.pbar_found_of_total.grid(row=5, column=0, sticky=tk.EW, padx=5, pady=(0, 10))
+        self.pbar_found_of_total_label_var = tk.StringVar(value="0/0 (0.00%)")
+        tk.Label(self.progress_frame, textvariable=self.pbar_found_of_total_label_var).grid(row=5, column=1, sticky=tk.W, padx=5)
+
+        self.final_status_label_var = tk.StringVar(value="Proceso en ejecución...")
+        tk.Label(self.progress_frame, textvariable=self.final_status_label_var, pady=20, font="-weight bold").grid(row=6, column=0, columnspan=2, sticky=tk.W)
+
+        self.progress_frame.columnconfigure(0, weight=1)
+
+
+    def process_queue(self):
+        try:
+            message = self.progress_queue.get_nowait()
+
+            if message['type'] == 'total':
+                self.total_articles = message['value']
+                self.pbar_searched['maximum'] = self.total_articles
+                self.pbar_found_of_total['maximum'] = self.total_articles
+
+            elif message['type'] == 'progress':
+                searched = message['searched']
+                found = message['found']
+
+                if self.total_articles > 0:
+                    # Bar 1
+                    self.pbar_searched['value'] = searched
+                    searched_perc = (searched / self.total_articles) * 100
+                    self.pbar_searched_label_var.set(f"{searched}/{self.total_articles} ({searched_perc:.2f}%)")
+
+                    # Bar 2
+                    if searched > 0:
+                        self.pbar_found_of_searched['maximum'] = searched
+                        self.pbar_found_of_searched['value'] = found
+                        found_of_searched_perc = (found / searched) * 100
+                        self.pbar_found_of_searched_label_var.set(f"{found}/{searched} ({found_of_searched_perc:.2f}%)")
+
+                    # Bar 3
+                    self.pbar_found_of_total['value'] = found
+                    found_of_total_perc = (found / self.total_articles) * 100
+                    self.pbar_found_of_total_label_var.set(f"{found}/{self.total_articles} ({found_of_total_perc:.2f}%)")
+
+            elif message['type'] == 'done':
+                self.final_status_label_var.set(message['message'])
+                self.cancel_button.config(text="Cerrar", state=tk.NORMAL)
+                return # Stop polling
+
+            elif message['type'] == 'error':
+                self.final_status_label_var.set(f"ERROR: {message['message']}")
+                self.cancel_button.config(text="Cerrar", state=tk.NORMAL)
+                return # Stop polling
+
+        except Empty:
+            pass
+
+        self.master.after(100, self.process_queue)
+
 
     def browse_input_file(self):
         path = filedialog.askopenfilename(title="Seleccionar archivo con DOIs", filetypes=(("Archivos Excel", "*.xlsx *.xls"), ("Archivos CSV", "*.csv"), ("Todos los archivos", "*.*")))
@@ -108,7 +186,23 @@ class ConfigurationGUI:
             "user_defined_mirrors": mirrors,
         }
         self.cancelled = False
-        self.master.destroy()
+
+        # Switch to the progress view
+        self.config_frame.pack_forget()
+        self.progress_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Create queue for thread communication
+        self.progress_queue = Queue()
+
+        # Start worker thread
+        self.worker_thread = threading.Thread(
+            target=download_pdfs_from_file,
+            args=(self.config, self.progress_queue)
+        )
+        self.worker_thread.start()
+
+        # Start polling the queue
+        self.master.after(100, self.process_queue)
 
     def cancel_process(self):
         self.cancelled = True
@@ -228,104 +322,70 @@ def get_pdf_content_via_js(driver, pdf_url):
 #         except tk.TclError: pass
 
 def format_and_log_article_status(original_row_data, doi, title, current_article_num, total_articles, 
-                                  successful_downloads_count_for_stats, # Count *after* this article's attempt
+                                  successful_downloads_count_for_stats,
                                   mirror_attempts_details, 
-                                  overall_doi_status, current_user_inter_doi_delay, is_retry=False):
+                                  overall_doi_status, current_user_inter_doi_delay, is_retry=False, failed_articles_data_len=0):
     try:
+        # --- Calculations ---
         buscados_percentage = (current_article_num / total_articles) * 100 if total_articles > 0 else 0
         obtenidos_percentage = (successful_downloads_count_for_stats / total_articles) * 100 if total_articles > 0 else 0
-        
+        parcial_percentage = (successful_downloads_count_for_stats / current_article_num) * 100 if current_article_num > 0 else 0
+
         log_lines = []
+
+        # --- Initial Info Block ---
         retry_prefix = "[REINTENTO] " if is_retry else ""
-        prefix_applied_in_this_function = False
+        log_lines.append(f"{retry_prefix}Artículo: {current_article_num}/{total_articles} ({buscados_percentage:.2f}%)")
+        log_lines.append(f"Título: {title if title else 'N/A'}")
 
-        # log_lines.append(f"{retry_prefix}Artículo: {current_article_num}/{total_articles} ({buscados_percentage:.2f}%)")
-        # log_lines.append(f"Título: {title if title else 'N/A'}")
-
-        # # Retrieve First Author information
-        # author_val = original_row_data.get('First Author', 'N/A')
-        # if author_val == 'N/A': # Fallback to "Autores" (case-insensitive)
-        #     autores_keys = [k for k in original_row_data.keys() if str(k).lower() == 'autores']
-        #     author_val = original_row_data.get(autores_keys[0], 'N/A') if autores_keys else 'N/A'
-        # if author_val == 'N/A': # Fallback to "Authors" (case-insensitive)
-        #     authors_keys_en = [k for k in original_row_data.keys() if str(k).lower() == 'authors']
-        #     author_val = original_row_data.get(authors_keys_en[0], 'N/A') if authors_keys_en else 'N/A'
-        # log_lines.append(f"First Author: {author_val}")
-
-        # # Prioritize "Journal/Book" for journal title
-        # journal_title_val = original_row_data.get('Journal/Book', 'N/A')
-
-        # # If "Journal/Book" is not found (or has no value and resulted in 'N/A'),
-        # # then try the old 'revista' logic as a fallback.
-        # if journal_title_val == 'N/A':
-        #     # Case-insensitive search for 'revista'
-        #     revista_keys = [k for k in original_row_data.keys() if str(k).lower() == 'revista']
-        #     journal_title_val = original_row_data.get(revista_keys[0], 'N/A') if revista_keys else 'N/A'
-        # log_lines.append(f"Journal/Book: {journal_title_val}")
-
-        # # Retrieve Publication Year information
-        # pub_year_val = original_row_data.get('Publication Year', 'N/A')
-        # if pub_year_val == 'N/A': # Fallback to "Fecha de publicación" (case-insensitive)
-        #     fecha_pub_keys = [k for k in original_row_data.keys() if str(k).lower() == 'fecha de publicación']
-        #     pub_year_val = original_row_data.get(fecha_pub_keys[0], 'N/A') if fecha_pub_keys else 'N/A'
-        # if pub_year_val == 'N/A': # Fallback to "Year" (case-insensitive)
-        #     year_keys = [k for k in original_row_data.keys() if str(k).lower() == 'year']
-        #     pub_year_val = original_row_data.get(year_keys[0], 'N/A') if year_keys else 'N/A'
-        # if pub_year_val == 'N/A': # Fallback to "Año" (case-insensitive)
-        #     ano_keys = [k for k in original_row_data.keys() if str(k).lower() == 'año']
-        #     pub_year_val = original_row_data.get(ano_keys[0], 'N/A') if ano_keys else 'N/A'
-        # log_lines.append(f"Publication Year: {pub_year_val}")
+        # Simplified author and journal info extraction for concise logging
+        author_val = original_row_data.get('First Author', 'N/A')
+        journal_title_val = original_row_data.get('Journal/Book', 'N/A')
+        pub_year_val = original_row_data.get('Publication Year', 'N/A')
         
-        # log_lines.append(f"DOI: {doi}")
+        log_lines.append(f"First Author: {author_val}")
+        log_lines.append(f"Journal/Book: {journal_title_val}")
+        log_lines.append(f"Publication Year: {pub_year_val}")
+        log_lines.append(f"DOI: {doi}")
+        log_lines.append("")
 
+        # --- Mirror Attempts ---
         for i, attempt in enumerate(mirror_attempts_details):
-            line_prefix = ""
-            if is_retry and not prefix_applied_in_this_function:
-                line_prefix = retry_prefix
-                prefix_applied_in_this_function = True
-
             mirror_url, status, reason = attempt
             try:
                 domain_match = re.search(r'https?://(?:www\.)?([a-zA-Z0-9.-]+)(?:/|$)', mirror_url)
                 mirror_short_name = domain_match.group(1) if domain_match else mirror_url[-20:]
-            except Exception: mirror_short_name = mirror_url[-20:] 
-            log_lines.append(f"{line_prefix}Intento Mirror {i+1} ({mirror_short_name}): {status}. {reason if reason else ''}".strip())
+            except Exception:
+                mirror_short_name = mirror_url[-20:]
+            log_lines.append(f"Intento Mirror {i+1} ({mirror_short_name}): {status}. {reason if reason else ''}".strip())
+        log_lines.append("")
 
-        final_doi_status_prefix = ""
-        if is_retry and not prefix_applied_in_this_function:
-            final_doi_status_prefix = retry_prefix
-            prefix_applied_in_this_function = True
-        log_lines.append(f"{final_doi_status_prefix}Artículo {overall_doi_status}")
-
-        total_downloaded_prefix = ""
-        if is_retry and not prefix_applied_in_this_function:
-            total_downloaded_prefix = retry_prefix
-            # prefix_applied_in_this_function = True # Not strictly needed to set here as it's the last use
-        log_lines.append(f"{total_downloaded_prefix}Total Descargados (actualizado): {successful_downloads_count_for_stats}/{total_articles} ({obtenidos_percentage:.2f}%)")
+        # --- Status and Totals ---
+        if overall_doi_status.startswith("OBTENIDO"):
+            log_lines.append("## OBTENIDO ##")
+        else:
+            log_lines.append("## FALTANTE ##")
+        log_lines.append("")
         
+        log_lines.append(f"Total descargados parcial: {successful_downloads_count_for_stats}/{current_article_num}\t({parcial_percentage:.2f}%)")
+        log_lines.append(f"Total Descargados:         {successful_downloads_count_for_stats}/{total_articles}\t({obtenidos_percentage:.2f}%)")
+        log_lines.append("")
+
+        # --- Waiting Message ---
+        # Simplified logic: print if not the absolute last item being processed.
+        is_last_main_loop_item_with_no_retries = (current_article_num == total_articles) and (not is_retry) and (failed_articles_data_len == 0)
+        is_last_retry_item = is_retry and (failed_articles_data_len <= 1)
+
+        if not is_last_main_loop_item_with_no_retries and not is_last_retry_item:
+            log_lines.append(f"Esperando {current_user_inter_doi_delay} segundos…")
+
+        # --- Final Print ---
         formatted_message = "\n".join(log_lines)
-        print(f"\n{formatted_message}") 
-        
-        # Only print waiting message if it's not the very last article overall OR if it failed (implying more retries or end)
-        # This avoids "Waiting..." after the final successful article of the main loop if no retries follow.
-        is_last_article_overall = (current_article_num == total_articles and not is_retry and not failed_articles_data) # Heuristic
-        
-        if not (overall_doi_status == "OBTENIDO" and is_last_article_overall and not is_retry) : # Check if not last successful article
-             # Check if it's not the last item in its current loop (main or retry)
-            if not is_retry and current_article_num < total_articles : # Main loop, not last
-                 print(f"Esperando {current_user_inter_doi_delay} segundos…\n")
-            elif is_retry : # Always print for retries unless it's the very very last action. This is tricky.
-                 # Let's say, if there are more retries OR if this isn't the absolute last processed item.
-                 # This part of the logic for waiting message might need refinement based on exact desired flow.
-                 # For now, print it if it's a retry and not the last one in the retry batch.
-                 # The caller of format_and_log_article_status will handle the actual time.sleep()
-                 print(f"Esperando {current_user_inter_doi_delay} segundos (post-reintento)...\n")
-
+        print(f"\n{formatted_message}")
 
     except Exception as e:
         print(f"\nError al formatear log para DOI {doi}: {e}")
         print(f"Fallback Log: DOI: {doi}, Status: {overall_doi_status}\n")
-
 
 def clean_filename(title):
     return re.sub(r'[\\/*?:"<>|]', '_', title)
@@ -1156,35 +1216,28 @@ def download_from_pmc(doi, title, session): # Renamed from download_from_pmc_fix
 def print_to_console(message, orig_stdout):
     print(message, file=orig_stdout)
 
-def download_pdfs_from_file(config):
-    # WebDriver will be initialized here
-    driver = None  # Initialize driver to None
+def download_pdfs_from_file(config, queue):
+    driver = None
     try:
-        options = webdriver.ChromeOptions()
-        options.add_argument('--headless')
-        options.add_argument('--disable-gpu')  # Recommended for headless
-        options.add_argument('--no-sandbox') # Often needed in restricted environments
-        options.add_argument('--disable-dev-shm-usage') # Often needed in restricted environments
-        # Optional: Set a common user agent for Selenium if needed, though browser's default is usually fine
-        # options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-        print("Inicializando WebDriver de Selenium en modo headless...")
-        driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
-        print("WebDriver de Selenium inicializado correctamente.")
-    except Exception as e:
-        print(f"Error al inicializar WebDriver de Selenium: {e}")
-        print("Las descargas basadas en Selenium se omitirán.")
-        driver = None # Ensure driver is None if initialization fails
-    original_stdout = sys.stdout 
-    # root = tk.Tk(); root.withdraw() # GUI elements removed
-    # log_window = None; log_text_widget = None # GUI elements removed
-    df = None # Initialize df to None
-    temp_pdf_paths = [] # Initialize temp_pdf_paths as it's used in finally
+        # --- WebDriver Initialization ---
+        try:
+            options = webdriver.ChromeOptions()
+            options.add_argument('--headless')
+            options.add_argument('--disable-gpu')
+            options.add_argument('--no-sandbox')
+            options.add_argument('--disable-dev-shm-usage')
+            print("Inicializando WebDriver de Selenium en modo headless...")
+            driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
+            print("WebDriver de Selenium inicializado correctamente.")
+        except Exception as e:
+            print(f"Error al inicializar WebDriver de Selenium: {e}")
+            print("Las descargas basadas en Selenium se omitirán.")
+            driver = None
 
-    # GUI Log window and stdout redirection are disabled.
-    # All print statements will go to the original stdout (console).
-
-    try:
-        # --- CONFIGURATION FROM GUI ---
+        # --- Configuration Unpacking ---
+        original_stdout = sys.stdout
+        df = None
+        temp_pdf_paths = []
         input_file_path = config["input_file_path"]
         zip_path = config["zip_path"]
         excel_report_path_config = config["excel_report_path"]
@@ -1199,72 +1252,54 @@ def download_pdfs_from_file(config):
             if not mirror_url.endswith('/'):
                 mirror_url += '/'
             user_defined_mirrors.append(mirror_url)
-
         sci_hub_base_url_for_report = user_defined_mirrors[0] if user_defined_mirrors else "N/A"
-        # --- END OF CONFIGURATION ---
-        
+
         print("\n--- Configuración Aplicada ---")
         print(f"Archivo de entrada: {input_file_path}")
-        print(f"Archivo ZIP de salida: {zip_path}")
-        if excel_report_path_config: print(f"Archivo de reporte Excel: {excel_report_path_config}")
-        else: print("Reporte Excel: No se generará (ruta no especificada).")
-        print(f"Retraso Inter-DOI: {user_inter_doi_delay}s")
-        print(f"Retraso Cambio de Mirror: {user_mirror_switch_delay}s")
-        print(f"Mirrors Sci-Hub a utilizar: {', '.join(user_defined_mirrors)}")
-        print("-----------------------------------------------------\n")
-        # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
+        # ... (rest of the print statements)
 
-        session = requests.Session(); session.headers.update({'User-Agent': STANDARD_USER_AGENT})
-        all_articles_log = []; successful_articles_data = []; failed_articles_data = []; original_input_columns = []
-        
-        try: # File reading try block
+        # --- File Reading ---
+        session = requests.Session()
+        session.headers.update({'User-Agent': STANDARD_USER_AGENT})
+        all_articles_log = []
+        successful_articles_data = []
+        failed_articles_data = []
+        original_input_columns = []
+
+        try:
             file_extension = os.path.splitext(input_file_path)[1].lower()
             if file_extension in ['.xlsx', '.xls']:
-                try:
-                    df = pd.read_excel(input_file_path)
-                except Exception as e:
-                    messagebox.showerror("Error de Excel", f"Error al leer Excel: {e}")
-                    raise # Re-raise to be caught by the outer exception handler for file reading
-            elif file_extension == '.csv': # Explicitly handle CSV
-                try:
-                    df = pd.read_csv(input_file_path)
-                except Exception as e:
-                    messagebox.showerror("Error de CSV", f"Error al leer CSV: {e}")
-                    raise # Re-raise
+                df = pd.read_excel(input_file_path)
+            elif file_extension == '.csv':
+                df = pd.read_csv(input_file_path)
             else:
-                messagebox.showerror("Error de Archivo", f"Tipo de archivo no soportado: {file_extension}\nPor favor, use Excel o CSV.")
-                # Set df to None or raise an error to ensure it's handled before use
-                # Raising an error is cleaner to be caught by the existing handler.
                 raise ValueError(f"Tipo de archivo no soportado: {file_extension}")
 
-            if df is not None: # Proceed only if df was loaded
+            if df is not None:
                 original_input_columns = [col for col in df.columns if col not in ['DOI', 'Title']]
-            else: # Should not be reached if non-supported file types raise an error
+            else:
                 raise ValueError("DataFrame no fue cargado correctamente.")
-
-        except Exception as e: # Catch any exception from file reading block
+        except Exception as e:
             print(f"Error fatal al leer archivo de entrada: {e}")
-            # if log_window and log_window.winfo_exists(): log_window.destroy() # GUI logging disabled
-            messagebox.showerror("Error Crítico de Archivo", f"No se pudo leer el archivo de entrada: {e}\nEl programa terminará.")
-            return # Exit if file reading fails
-
-        # Crucial check: If df is still None here, it means file reading failed in a way not caught above,
-        # or a new path was introduced. This ensures we don't proceed.
-        if df is None:
-            print("Error Crítico: DataFrame (df) no fue inicializado. Terminando proceso.")
-            # if log_window and log_window.winfo_exists(): log_window.destroy() # GUI logging disabled
-            messagebox.showerror("Error Crítico", "DataFrame no pudo ser cargado. El programa terminará.")
+            queue.put({'type': 'error', 'message': f"Error al leer archivo: {e}"})
             return
 
-        successful_downloads = 0; failed_downloads_summary_list = []; total_downloaded_size_bytes = 0 # temp_pdf_paths already initialized
-        zip_creation_or_main_loop_error = False 
+        if df is None:
+            print("Error Crítico: DataFrame (df) no fue inicializado.")
+            queue.put({'type': 'error', 'message': "DataFrame no pudo ser cargado."})
+            return
 
-        try: # Main processing try (zip creation and DOI loops)
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                total_articles = len(df) # df should be valid here
-                for index, row in df.iterrows():
-                    original_row_data = row.to_dict(); start_time = datetime.now()
-                    doi = str(original_row_data.get('DOI', original_row_data.get('doi', ''))).strip()
+        # --- Main Processing Loop ---
+        successful_downloads = 0
+        total_downloaded_size_bytes = 0
+        total_articles = len(df)
+        queue.put({'type': 'total', 'value': total_articles})
+
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for index, row in df.iterrows():
+                original_row_data = row.to_dict()
+                start_time = datetime.now()
+                doi = str(original_row_data.get('DOI', original_row_data.get('doi', ''))).strip()
                     title = str(original_row_data.get('Title', original_row_data.get('title', ''))).strip()
                     effective_title = title if title else doi
                     
@@ -1292,42 +1327,6 @@ def download_pdfs_from_file(config):
                     
                     pdf_filename_in_zip = clean_filename(effective_title)[:150] + ".pdf"
 
-                    # --- Initial Article Summary Print Block (Main Loop) ---
-                    current_article_num = index + 1 # Already have current_article_num_for_log, can reuse
-                    buscados_percentage = (current_article_num / total_articles) * 100 if total_articles > 0 else 0
-
-                    author_val_initial = original_row_data.get('First Author', 'N/A')
-                    if author_val_initial == 'N/A':
-                        autores_keys_initial = [k for k in original_row_data.keys() if str(k).lower() == 'autores']
-                        author_val_initial = original_row_data.get(autores_keys_initial[0], 'N/A') if autores_keys_initial else 'N/A'
-                    if author_val_initial == 'N/A':
-                        authors_keys_en_initial = [k for k in original_row_data.keys() if str(k).lower() == 'authors']
-                        author_val_initial = original_row_data.get(authors_keys_en_initial[0], 'N/A') if authors_keys_en_initial else 'N/A'
-
-                    journal_title_val_initial = original_row_data.get('Journal/Book', 'N/A')
-                    if journal_title_val_initial == 'N/A':
-                        revista_keys_initial = [k for k in original_row_data.keys() if str(k).lower() == 'revista']
-                        journal_title_val_initial = original_row_data.get(revista_keys_initial[0], 'N/A') if revista_keys_initial else 'N/A'
-
-                    pub_year_val_initial = original_row_data.get('Publication Year', 'N/A')
-                    if pub_year_val_initial == 'N/A':
-                        fecha_pub_keys_initial = [k for k in original_row_data.keys() if str(k).lower() == 'fecha de publicación']
-                        pub_year_val_initial = original_row_data.get(fecha_pub_keys_initial[0], 'N/A') if fecha_pub_keys_initial else 'N/A'
-                    if pub_year_val_initial == 'N/A':
-                        year_keys_initial = [k for k in original_row_data.keys() if str(k).lower() == 'year']
-                        pub_year_val_initial = original_row_data.get(year_keys_initial[0], 'N/A') if year_keys_initial else 'N/A'
-                    if pub_year_val_initial == 'N/A':
-                        ano_keys_initial = [k for k in original_row_data.keys() if str(k).lower() == 'año']
-                        pub_year_val_initial = original_row_data.get(ano_keys_initial[0], 'N/A') if ano_keys_initial else 'N/A'
-
-                    print(f"Artículo: {current_article_num}/{total_articles} ({buscados_percentage:.2f}%)")
-                    print(f"Título: {effective_title if effective_title else 'N/A'}")
-                    print(f"First Author: {author_val_initial}")
-                    print(f"Journal/Book: {journal_title_val_initial}")
-                    print(f"Publication Year: {pub_year_val_initial}")
-                    print(f"DOI: {doi}")
-                    print("-" * 30)
-                    # --- End Initial Article Summary Print Block ---
                     
                     mirrors_to_try_for_this_doi = list(user_defined_mirrors)
                     pdf_content = None; download_successful_this_doi = False; successful_mirror_for_this_doi = ""
@@ -1445,27 +1444,31 @@ def download_pdfs_from_file(config):
                         # temp_failure_reason_for_log and temp_detailed_status_for_log will have the last failure
                         failed_articles_data.append({**original_row_data, 'Failure_Reason': temp_failure_reason_for_log, 'Detailed_Status': temp_detailed_status_for_log, 'original_index': index}) # Store original index
 
-                    format_and_log_article_status(original_row_data, doi, effective_title, current_article_num_for_log, total_articles, successful_downloads, mirror_attempts_details_for_doi, overall_doi_status, user_inter_doi_delay)
+                    format_and_log_article_status(original_row_data, doi, effective_title, current_article_num_for_log, total_articles, successful_downloads, mirror_attempts_details_for_doi, overall_doi_status, user_inter_doi_delay, failed_articles_data_len=len(failed_articles_data))
                     
                     log_entry_failure_reason = temp_failure_reason_for_log if not download_successful_this_doi else ""
                     log_entry_detailed_status = temp_detailed_status_for_log if not download_successful_this_doi else f"Success_{successful_mirror_for_this_doi}" # Simplified success status for log
 
                     all_articles_log.append({**original_row_data, 'Start_Time': start_time.strftime("%Y-%m-%d %H:%M:%S"), 'End_Time': end_time.strftime("%Y-%m-%d %H:%M:%S"), 'Duration_Seconds': (end_time - start_time).total_seconds(), 'Detailed_Status': log_entry_detailed_status, 'Failure_Reason': log_entry_failure_reason, 'Successful_Mirror': successful_mirror_for_this_doi })
                     
-                    # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
-                    # Separator after logging for the current article in the main loop
+                    queue.put({'type': 'progress', 'searched': index + 1, 'found': successful_downloads})
+
                     print_to_console("===============================================================================================", original_stdout)
-                    if current_article_num_for_log < total_articles : time.sleep(user_inter_doi_delay) # Sleep if not the last article
-                    # Ensure overall_doi_status is updated for the log entry if it was a GS success
+                    if current_article_num_for_log < total_articles : time.sleep(user_inter_doi_delay)
                     if download_successful_this_doi and "Google Scholar" in successful_mirror_for_this_doi:
-                         log_entry_detailed_status = f"Success_{successful_mirror_for_this_doi}" # Update for GS success
+                         log_entry_detailed_status = f"Success_{successful_mirror_for_this_doi}"
 
-        # ... (except FileNotFoundError, Exception for zip as before) ...
-        except FileNotFoundError: messagebox.showerror("Error", f"No se pudo crear ZIP (Directorio no encontrado): {zip_path}"); print("Error crítico: FileNotFoundError al crear ZIP."); zip_creation_or_main_loop_error = True
-        except Exception as e: messagebox.showerror("Error", f"Error inesperado en ZIP o descargas: {e}"); print(f"Error crítico: Excepción en ZIP o descargas: {e}."); zip_creation_or_main_loop_error = True
+        except FileNotFoundError as e:
+            print(f"Error crítico: No se pudo crear ZIP (Directorio no encontrado): {zip_path}")
+            queue.put({'type': 'error', 'message': f"No se pudo crear ZIP: {e}"})
+            return
+        except Exception as e:
+            print(f"Error crítico: Excepción en ZIP o descargas: {e}.")
+            queue.put({'type': 'error', 'message': f"Error inesperado: {e}"})
+            return
 
 
-        # --- Start of block to be modified ---
+        # --- Retry Phase ---
         if failed_articles_data:
             print("\n--- Iniciando Fase de Reintento para Artículos Fallidos ---")
 
@@ -1474,41 +1477,11 @@ def download_pdfs_from_file(config):
         mirrors_for_retry = list(user_defined_mirrors)
 
         for retry_idx, failed_article_entry in enumerate(temp_failed_articles_data_for_iteration):
-            # ... (retry logic as before) ...
             original_index_for_retry = failed_article_entry.get('original_index', -1)
             current_article_num_for_log_retry = original_index_for_retry + 1 if original_index_for_retry != -1 else retry_idx + 1
             doi_to_retry = str(failed_article_entry.get('DOI', failed_article_entry.get('doi', ''))).strip()
             effective_title_for_retry = str(failed_article_entry.get('Title', failed_article_entry.get('title', doi_to_retry))).strip() or doi_to_retry
             pdf_filename_in_zip_retry = clean_filename(effective_title_for_retry)[:150] + ".pdf"
-            buscados_percentage_retry = (current_article_num_for_log_retry / total_articles) * 100 if total_articles > 0 else 0
-            author_val_retry = failed_article_entry.get('First Author', 'N/A')
-            if author_val_retry == 'N/A':
-                autores_keys_retry = [k for k in failed_article_entry.keys() if str(k).lower() == 'autores']
-                author_val_retry = failed_article_entry.get(autores_keys_retry[0], 'N/A') if autores_keys_retry else 'N/A'
-            if author_val_retry == 'N/A':
-                authors_keys_en_retry = [k for k in failed_article_entry.keys() if str(k).lower() == 'authors']
-                author_val_retry = failed_article_entry.get(authors_keys_en_retry[0], 'N/A') if authors_keys_en_retry else 'N/A'
-            journal_title_val_retry = failed_article_entry.get('Journal/Book', 'N/A')
-            if journal_title_val_retry == 'N/A':
-                revista_keys_retry = [k for k in failed_article_entry.keys() if str(k).lower() == 'revista']
-                journal_title_val_retry = failed_article_entry.get(revista_keys_retry[0], 'N/A') if revista_keys_retry else 'N/A'
-            pub_year_val_retry = failed_article_entry.get('Publication Year', 'N/A')
-            if pub_year_val_retry == 'N/A':
-                fecha_pub_keys_retry = [k for k in failed_article_entry.keys() if str(k).lower() == 'fecha de publicación']
-                pub_year_val_retry = failed_article_entry.get(fecha_pub_keys_retry[0], 'N/A') if fecha_pub_keys_retry else 'N/A'
-            if pub_year_val_retry == 'N/A':
-                year_keys_retry = [k for k in failed_article_entry.keys() if str(k).lower() == 'year']
-                pub_year_val_retry = failed_article_entry.get(year_keys_retry[0], 'N/A') if year_keys_retry else 'N/A'
-            if pub_year_val_retry == 'N/A':
-                ano_keys_retry = [k for k in failed_article_entry.keys() if str(k).lower() == 'año']
-                pub_year_val_retry = failed_article_entry.get(ano_keys_retry[0], 'N/A') if ano_keys_retry else 'N/A'
-            print(f"[REINTENTO] Artículo: {current_article_num_for_log_retry}/{total_articles} ({buscados_percentage_retry:.2f}%)")
-            print(f"[REINTENTO] Título: {effective_title_for_retry if effective_title_for_retry else 'N/A'}")
-            print(f"[REINTENTO] First Author: {author_val_retry}")
-            print(f"[REINTENTO] Journal/Book: {journal_title_val_retry}")
-            print(f"[REINTENTO] Publication Year: {pub_year_val_retry}")
-            print(f"[REINTENTO] DOI: {doi_to_retry}")
-            print("-" * 30)
             mirror_attempts_details_for_retry = []
             overall_retry_status = "FALTANTE"
             pdf_content_retry = None; retry_successful_this_doi = False; successful_mirror_for_retry = ""
@@ -1592,6 +1565,7 @@ def download_pdfs_from_file(config):
             original_article_log_entry = next((log for log in all_articles_log if str(log.get('DOI', log.get('doi', ''))).strip() == doi_to_retry), None)
             if retry_successful_this_doi and pdf_content_retry:
                 successful_downloads += 1
+                queue.put({'type': 'progress', 'searched': total_articles, 'found': successful_downloads})
                 if not overall_retry_status.startswith("OBTENIDO"):
                      overall_retry_status = "OBTENIDO"
                 articles_successfully_retried_ids.append(doi_to_retry)
@@ -1621,7 +1595,7 @@ def download_pdfs_from_file(config):
                     original_article_log_entry['Failure_Reason'] = temp_failure_reason_for_retry_log
                 for item in failed_articles_data:
                     if str(item.get('DOI',item.get('doi',''))).strip() == doi_to_retry: item['Failure_Reason'] = temp_failure_reason_for_retry_log; item['Detailed_Status'] = temp_detailed_status_for_retry_log; break
-            format_and_log_article_status(failed_article_entry, doi_to_retry, effective_title_for_retry, current_article_num_for_log_retry, total_articles, successful_downloads, mirror_attempts_details_for_retry, overall_retry_status, user_inter_doi_delay, is_retry=True)
+            format_and_log_article_status(failed_article_entry, doi_to_retry, effective_title_for_retry, current_article_num_for_log_retry, total_articles, successful_downloads, mirror_attempts_details_for_retry, overall_retry_status, user_inter_doi_delay, is_retry=True, failed_articles_data_len=len(temp_failed_articles_data_for_iteration) - retry_idx)
             print_to_console("===============================================================================================", original_stdout)
             if retry_idx < len(temp_failed_articles_data_for_iteration) - 1: time.sleep(user_inter_doi_delay)
 
@@ -1637,9 +1611,8 @@ def download_pdfs_from_file(config):
                 summary_message += f"\n- Título: {item['title']}, DOI: {item['doi']}, Razón: {item['reason']}"
 
         print("\n" + "="*50); print(summary_message); print("="*50);
-        messagebox.showinfo("Resumen Descarga", summary_message)
 
-        # This is the new logic for Excel report generation
+        # --- Excel Report Generation ---
         excel_report_path_to_use = excel_report_path_config
         if excel_report_path_to_use:
             print(f"Generando reporte Excel en: {excel_report_path_to_use}")
@@ -1662,13 +1635,14 @@ def download_pdfs_from_file(config):
                 df_tiempos = create_ordered_df(all_articles_log, ti_cols)
                 with pd.ExcelWriter(excel_report_path_to_use, engine='openpyxl') as writer:
                     df_obtenidos.to_excel(writer, sheet_name='Obtenidos', index=False); df_fallidos.to_excel(writer, sheet_name='Fallidos', index=False); df_tiempos.to_excel(writer, sheet_name='Tiempos', index=False)
-                messagebox.showinfo("Reporte Excel", f"Reporte Excel guardado: {excel_report_path_to_use}"); print(f"Reporte Excel guardado: {excel_report_path_to_use}")
-            except Exception as e: messagebox.showerror("Error Guardando Excel", f"No se pudo guardar reporte Excel: {e}"); print(f"Error Excel: {e}")
+                print(f"Reporte Excel guardado: {excel_report_path_to_use}")
+            except Exception as e:
+                print(f"Error guardando reporte Excel: {e}")
+                queue.put({'type': 'error', 'message': f"Error guardando Excel: {e}"})
         else:
             print("Generación de reporte Excel omitida (ruta no especificada).")
 
-        if zip_creation_or_main_loop_error:
-            print("Proceso interrumpido por error crítico inicial. No se generará resumen ni Excel.")
+        queue.put({'type': 'done', 'message': f'Completado: {successful_downloads}/{total_articles} artículos descargados.'})
 
         print("\n" + "="*50)
         print("--- Archivos Generados ---")
@@ -1729,13 +1703,7 @@ def download_pdfs_from_file(config):
 
 if __name__ == "__main__":
     root = tk.Tk()
-    gui = ConfigurationGUI(root)
+    app = ConfigurationGUI(root)
     root.mainloop()
-
-    if not gui.cancelled:
-        config = gui.config
-        download_pdfs_from_file(config)
-    else:
-        print("Proceso cancelado por el usuario.")
 
     print("\nScript finalizado.")

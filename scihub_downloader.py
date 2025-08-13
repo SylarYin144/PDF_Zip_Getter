@@ -381,9 +381,9 @@ def extract_pdf_link_from_html(article_page_url, session):
             pdf_src = embed['src']
             return urljoin(article_page_url, pdf_src)
         return None
-    except requests.exceptions.RequestException as e:
+    except requests.exceptions.RequestException:
         return None
-    except Exception as e:
+    except Exception:
         return None
 
 def download_from_google_scholar_old(doi, title, session):
@@ -422,18 +422,18 @@ def download_from_google_scholar_old(doi, title, session):
                         domain_match = re.search(r'https?://(?:www\.)?([a-zA-Z0-9.-]+)(?:/|$)', pdf_url)
                         source_domain = domain_match.group(1) if domain_match else "Unknown Domain"
                         return pdf_content, f"OBTENIDO (Google Scholar via {source_domain})"
-            except requests.exceptions.HTTPError as e:
+            except requests.exceptions.HTTPError:
                 pass
             except requests.exceptions.Timeout:
                 pass
-            except requests.exceptions.RequestException as e:
+            except requests.exceptions.RequestException:
                 pass
-            except Exception as e:
+            except Exception:
                 pass
         return None, f"FALLO - No PDF en Google Scholar ({scholar_url})"
-    except requests.exceptions.RequestException as e:
+    except requests.exceptions.RequestException:
         return None, f"FALLO - Error búsqueda Google Scholar ({scholar_url})"
-    except Exception as e:
+    except Exception:
         return None, f"FALLO - Error inesperado Google Scholar ({scholar_url})"
 
 def download_from_google_scholar(doi, title, session):
@@ -688,7 +688,7 @@ def download_with_selenium_google_scholar(driver, doi, title):
         status_message = f"FALLO - Elemento no encontrado post-carga en Google Scholar (Selenium) ({driver.current_url if driver else scholar_url})"
     except Exception as e_general:
         print(f"SELENIUM GS: An unexpected error occurred after page load for DOI {doi} at {driver.current_url if driver else scholar_url}: {e_general}")
-        status_message = f"FALLO - Error inesperado post-carga Google Scholar (Selenium) ({driver.current_url if driver else scholar_url}, {str(e_general)[:100]})"
+        status_message = f"FALLO - Error inesperado post-carga en Google Scholar (Selenium) ({driver.current_url if driver else scholar_url}, {str(e_general)[:100]})"
     return None, status_message
 
 def download_with_selenium_pmc(driver, doi, title):
@@ -988,6 +988,8 @@ def print_to_console(message, orig_stdout):
 
 def download_pdfs_from_file(config, queue):
     driver = None
+    original_stdout = sys.stdout
+    temp_pdf_paths = []
     try:
         # --- WebDriver Initialization ---
         try:
@@ -1005,9 +1007,7 @@ def download_pdfs_from_file(config, queue):
             driver = None
 
         # --- Configuration Unpacking ---
-        original_stdout = sys.stdout
         df = None
-        temp_pdf_paths = []
         input_file_path = config["input_file_path"]
         zip_path = config["zip_path"]
         excel_report_path_config = config["excel_report_path"]
@@ -1026,7 +1026,13 @@ def download_pdfs_from_file(config, queue):
 
         print("\n--- Configuración Aplicada ---")
         print(f"Archivo de entrada: {input_file_path}")
-        # ... (rest of the print statements)
+        print(f"Archivo ZIP de salida: {zip_path}")
+        if excel_report_path_config: print(f"Archivo de reporte Excel: {excel_report_path_config}")
+        else: print("Reporte Excel: No se generará (ruta no especificada).")
+        print(f"Retraso Inter-DOI: {user_inter_doi_delay}s")
+        print(f"Retraso Cambio de Mirror: {user_mirror_switch_delay}s")
+        print(f"Mirrors Sci-Hub a utilizar: {', '.join(user_defined_mirrors)}")
+        print("-----------------------------------------------------\n")
 
         # --- File Reading ---
         session = requests.Session()
@@ -1069,147 +1075,184 @@ def download_pdfs_from_file(config, queue):
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
                 for index, row in df.iterrows():
                     original_row_data = row.to_dict()
-                start_time = datetime.now()
-                doi = str(original_row_data.get('DOI', original_row_data.get('doi', ''))).strip()
-                title = str(original_row_data.get('Title', original_row_data.get('title', ''))).strip()
-                effective_title = title if title else doi
+                    start_time = datetime.now()
+                    doi = str(original_row_data.get('DOI', original_row_data.get('doi', ''))).strip()
+                    title = str(original_row_data.get('Title', original_row_data.get('title', ''))).strip()
+                    effective_title = title if title else doi
 
-                current_article_num_for_log = index + 1
-                mirror_attempts_details_for_doi = []
-                overall_doi_status = "FALTANTE" # Default status
-
-                if not doi:
-                    failure_reason_for_report = "DOI vacío"; detailed_status_for_log = "Skipped_DOI_Missing"
-                    overall_doi_status = "FALTANTE (DOI Vacío)"
-                    format_and_log_article_status(original_row_data, doi, effective_title, current_article_num_for_log, total_articles, successful_downloads, mirror_attempts_details_for_doi, overall_doi_status, user_inter_doi_delay, failed_articles_data_len=len(failed_articles_data))
-                    end_time = datetime.now()
-                    log_entry = {**original_row_data, 'Start_Time': start_time.strftime("%Y-%m-%d %H:%M:%S"), 'End_Time': end_time.strftime("%Y-%m-%d %H:%M:%S"), 'Duration_Seconds': (end_time - start_time).total_seconds(), 'Detailed_Status': detailed_status_for_log, 'Failure_Reason': failure_reason_for_report, 'Successful_Mirror': ""}
-                    all_articles_log.append(log_entry); failed_articles_data.append({**original_row_data, 'Failure_Reason': failure_reason_for_report, 'Detailed_Status': detailed_status_for_log, 'original_index': index})
-                    print_to_console("===============================================================================================", original_stdout)
-                    time.sleep(user_inter_doi_delay)
-                    continue
-
-                pdf_filename_in_zip = clean_filename(effective_title)[:150] + ".pdf"
-
-                mirrors_to_try_for_this_doi = list(user_defined_mirrors)
-                pdf_content = None; download_successful_this_doi = False; successful_mirror_for_this_doi = ""
-                temp_detailed_status_for_log = ""; temp_failure_reason_for_log = ""
-
-                for mirror_idx, current_mirror_base_url in enumerate(mirrors_to_try_for_this_doi):
-                    full_sci_hub_url_for_html_page = f"{current_mirror_base_url}{doi}"
-                    mirror_status_str = "FALLO"; mirror_reason_str = ""
-                    
-                    actual_pdf_download_url = extract_pdf_link_from_html(full_sci_hub_url_for_html_page, session)
-                    if actual_pdf_download_url:
-                        try:
-                            response = session.get(actual_pdf_download_url, timeout=60); response.raise_for_status()
-                            content_type = response.headers.get('Content-Type', '').lower()
-                            if 'application/pdf' in content_type:
-                                pdf_content = response.content; mirror_status_str = "OBTENIDO (Extracción Iframe/Embed)"; temp_detailed_status_for_log = f"Success_iframe_or_embed_extraction_from_{current_mirror_base_url}"
-                            else:
-                                mirror_reason_str = f"Content-Type no PDF ({content_type})"; temp_detailed_status_for_log = f"Failure_iframe_or_embed_extraction_not_pdf_from_{current_mirror_base_url}"
-                        except requests.exceptions.HTTPError as e: mirror_reason_str = f"HTTPError {e.response.status_code}"; temp_detailed_status_for_log = f"Failure_iframe_or_embed_extraction_HTTP{e.response.status_code}_from_{current_mirror_base_url}"
-                        except requests.exceptions.RequestException as e: mirror_reason_str = "Error de conexión/RequestException en extracción"; temp_detailed_status_for_log = f"Failure_iframe_or_embed_extraction_RequestException_from_{current_mirror_base_url}"
-                        except Exception as e: mirror_reason_str = "Error inesperado en extracción"; temp_detailed_status_for_log = f"Failure_iframe_or_embed_extraction_Unexpected_from_{current_mirror_base_url}"
-                    else: mirror_reason_str = "No se encontró enlace PDF en HTML"; temp_detailed_status_for_log = f"Failure_No_PDF_Link_Found_In_HTML_from_{current_mirror_base_url}"
-
-                    if not pdf_content:
-                        temp_failure_reason_for_log = mirror_reason_str
-                        try:
-                            response = session.get(full_sci_hub_url_for_html_page, timeout=30); response.raise_for_status()
-                            content_type = response.headers.get('Content-Type', '').lower()
-                            if 'application/pdf' in content_type:
-                                pdf_content = response.content; mirror_status_str = "OBTENIDO (Acceso Directo Fallback)"; mirror_reason_str = ""; temp_detailed_status_for_log = f"Success_direct_DOI_access_fallback_from_{current_mirror_base_url}"
-                            else:
-                                mirror_reason_str = f"Content-Type no PDF ({content_type}) en acceso directo"; temp_detailed_status_for_log = f"Failure_direct_DOI_access_not_pdf_from_{current_mirror_base_url}"
-                        except requests.exceptions.HTTPError as e: mirror_reason_str = f"HTTPError {e.response.status_code} en acceso directo"; temp_detailed_status_for_log = f"Failure_direct_DOI_access_HTTP{e.response.status_code}_from_{current_mirror_base_url}"
-                        except requests.exceptions.RequestException as e: mirror_reason_str = "Error de conexión/RequestException en fallback"; temp_detailed_status_for_log = f"Failure_direct_DOI_access_RequestException_from_{current_mirror_base_url}"
-                        except Exception as e: mirror_reason_str = "Error inesperado en fallback"; temp_detailed_status_for_log = f"Failure_direct_DOI_access_Unexpected_from_{current_mirror_base_url}"
-
-                    specific_reason_for_temp_log = mirror_reason_str
-
-                    log_display_reason_for_sci_hub_attempt = mirror_reason_str
-                    if mirror_status_str == "FALLO":
-                        log_display_reason_for_sci_hub_attempt = full_sci_hub_url_for_html_page
-                        temp_failure_reason_for_log = specific_reason_for_temp_log
-                    else:
-                        temp_failure_reason_for_log = ""
-
-                    mirror_attempts_details_for_doi.append((current_mirror_base_url, mirror_status_str, log_display_reason_for_sci_hub_attempt))
-
-                    if pdf_content:
-                        download_successful_this_doi = True
-                        successful_mirror_for_this_doi = current_mirror_base_url
-                        if mirror_status_str.startswith("OBTENIDO"): overall_doi_status = mirror_status_str
-                        else: overall_doi_status = "OBTENIDO"
-                        temp_failure_reason_for_log = ""
-                        break
-                    else:
-                        if mirror_idx < len(mirrors_to_try_for_this_doi) - 1:
-                            time.sleep(user_mirror_switch_delay)
-
-                if not pdf_content and driver:
-                    print(f"INFO: DOI {doi} - Attempting Google Scholar (Selenium method)...")
-                    gs_selenium_pdf_content, gs_selenium_status_msg = download_with_selenium_google_scholar(driver, doi, effective_title)
-                    if gs_selenium_pdf_content:
-                        pdf_content = gs_selenium_pdf_content
-                        download_successful_this_doi = True
-                        successful_mirror_for_this_doi = "Google Scholar (Selenium)"
-                        overall_doi_status = gs_selenium_status_msg
-                        mirror_attempts_details_for_doi.append(("Google Scholar (Selenium)", "OBTENIDO", gs_selenium_status_msg))
-                        temp_detailed_status_for_log = f"Success_GoogleScholar_Selenium_{gs_selenium_status_msg}"
-                        temp_failure_reason_for_log = ""
-                    else:
-                        mirror_attempts_details_for_doi.append(("Google Scholar (Selenium)", "FALLO", gs_selenium_status_msg))
-                        temp_failure_reason_for_log = gs_selenium_status_msg
-                        temp_detailed_status_for_log = f"Failure_GoogleScholar_Selenium_{gs_selenium_status_msg}"
-
-                if not pdf_content and driver:
-                    print(f"INFO: DOI {doi} - Attempting PubMed Central (Selenium method)...")
-                    pmc_selenium_pdf_content, pmc_selenium_status_msg = download_with_selenium_pmc(driver, doi, effective_title)
-                    if pmc_selenium_pdf_content:
-                        pdf_content = pmc_selenium_pdf_content
-                        download_successful_this_doi = True
-                        successful_mirror_for_this_doi = pmc_selenium_status_msg
-                        overall_doi_status = pmc_selenium_status_msg
-                        mirror_attempts_details_for_doi.append(("PubMed Central (Selenium)", "OBTENIDO", pmc_selenium_status_msg))
-                        temp_detailed_status_for_log = f"Success_PubMedCentral_Selenium_{pmc_selenium_status_msg}"
-                        temp_failure_reason_for_log = ""
-                    else:
-                        mirror_attempts_details_for_doi.append(("PubMed Central (Selenium)", "FALLO", pmc_selenium_status_msg))
-                        temp_failure_reason_for_log = pmc_selenium_status_msg
-                        temp_detailed_status_for_log = f"Failure_PubMedCentral_Selenium_{pmc_selenium_status_msg}"
-
-                end_time = datetime.now()
-                if download_successful_this_doi and pdf_content:
-                    successful_downloads += 1
-                    if not overall_doi_status.startswith("OBTENIDO"):
-                        overall_doi_status = "OBTENIDO"
-                    data_for_successful_sheet = original_row_data.copy(); data_for_successful_sheet['Successful_Mirror'] = successful_mirror_for_this_doi; successful_articles_data.append(data_for_successful_sheet)
-                    temp_dir = "temp_scihub_pdfs";
-                    if not os.path.exists(temp_dir): os.makedirs(temp_dir)
-                    temp_pdf_path = os.path.join(temp_dir, f"temp_{os.getpid()}_{index}_{pdf_filename_in_zip}")
-                    with open(temp_pdf_path, 'wb') as f: f.write(pdf_content)
-                    try: total_downloaded_size_bytes += os.path.getsize(temp_pdf_path)
-                    except OSError as e: print(f"Advertencia: tamaño temp {temp_pdf_path}: {e}")
-                    zf.write(temp_pdf_path, arcname=pdf_filename_in_zip); temp_pdf_paths.append(temp_pdf_path)
-                else:
+                    current_article_num_for_log = index + 1
+                    mirror_attempts_details_for_doi = []
                     overall_doi_status = "FALTANTE"
-                    failed_articles_data.append({**original_row_data, 'Failure_Reason': temp_failure_reason_for_log, 'Detailed_Status': temp_detailed_status_for_log, 'original_index': index})
 
-                format_and_log_article_status(original_row_data, doi, effective_title, current_article_num_for_log, total_articles, successful_downloads, mirror_attempts_details_for_doi, overall_doi_status, user_inter_doi_delay, failed_articles_data_len=len(failed_articles_data))
+                    if not doi:
+                        failure_reason_for_report = "DOI vacío"
+                        detailed_status_for_log = "Skipped_DOI_Missing"
+                        overall_doi_status = "FALTANTE (DOI Vacío)"
+                        format_and_log_article_status(original_row_data, doi, effective_title, current_article_num_for_log, total_articles, successful_downloads, mirror_attempts_details_for_doi, overall_doi_status, user_inter_doi_delay, failed_articles_data_len=len(failed_articles_data))
+                        end_time = datetime.now()
+                        log_entry = {**original_row_data, 'Start_Time': start_time.strftime("%Y-%m-%d %H:%M:%S"), 'End_Time': end_time.strftime("%Y-%m-%d %H:%M:%S"), 'Duration_Seconds': (end_time - start_time).total_seconds(), 'Detailed_Status': detailed_status_for_log, 'Failure_Reason': failure_reason_for_report, 'Successful_Mirror': ""}
+                        all_articles_log.append(log_entry)
+                        failed_articles_data.append({**original_row_data, 'Failure_Reason': failure_reason_for_report, 'Detailed_Status': detailed_status_for_log, 'original_index': index})
+                        print_to_console("===============================================================================================", original_stdout)
+                        time.sleep(user_inter_doi_delay)
+                        continue
 
-                log_entry_failure_reason = temp_failure_reason_for_log if not download_successful_this_doi else ""
-                log_entry_detailed_status = temp_detailed_status_for_log if not download_successful_this_doi else f"Success_{successful_mirror_for_this_doi}"
+                    pdf_filename_in_zip = clean_filename(effective_title)[:150] + ".pdf"
+                    mirrors_to_try_for_this_doi = list(user_defined_mirrors)
+                    pdf_content = None
+                    download_successful_this_doi = False
+                    successful_mirror_for_this_doi = ""
+                    temp_detailed_status_for_log = ""
+                    temp_failure_reason_for_log = ""
 
-                all_articles_log.append({**original_row_data, 'Start_Time': start_time.strftime("%Y-%m-%d %H:%M:%S"), 'End_Time': end_time.strftime("%Y-%m-%d %H:%M:%S"), 'Duration_Seconds': (end_time - start_time).total_seconds(), 'Detailed_Status': log_entry_detailed_status, 'Failure_Reason': log_entry_failure_reason, 'Successful_Mirror': successful_mirror_for_this_doi })
+                    for mirror_idx, current_mirror_base_url in enumerate(mirrors_to_try_for_this_doi):
+                        full_sci_hub_url_for_html_page = f"{current_mirror_base_url}{doi}"
+                        mirror_status_str = "FALLO"
+                        mirror_reason_str = ""
 
-                queue.put({'type': 'progress', 'searched': index + 1, 'found': successful_downloads})
+                        actual_pdf_download_url = extract_pdf_link_from_html(full_sci_hub_url_for_html_page, session)
+                        if actual_pdf_download_url:
+                            try:
+                                response = session.get(actual_pdf_download_url, timeout=60)
+                                response.raise_for_status()
+                                content_type = response.headers.get('Content-Type', '').lower()
+                                if 'application/pdf' in content_type:
+                                    pdf_content = response.content
+                                    mirror_status_str = "OBTENIDO (Extracción Iframe/Embed)"
+                                    temp_detailed_status_for_log = f"Success_iframe_or_embed_extraction_from_{current_mirror_base_url}"
+                                else:
+                                    mirror_reason_str = f"Content-Type no PDF ({content_type})"
+                                    temp_detailed_status_for_log = f"Failure_iframe_or_embed_extraction_not_pdf_from_{current_mirror_base_url}"
+                            except requests.exceptions.HTTPError as e:
+                                mirror_reason_str = f"HTTPError {e.response.status_code}"
+                                temp_detailed_status_for_log = f"Failure_iframe_or_embed_extraction_HTTP{e.response.status_code}_from_{current_mirror_base_url}"
+                            except requests.exceptions.RequestException as e:
+                                mirror_reason_str = "Error de conexión/RequestException en extracción"
+                                temp_detailed_status_for_log = f"Failure_iframe_or_embed_extraction_RequestException_from_{current_mirror_base_url}"
+                            except Exception as e:
+                                mirror_reason_str = "Error inesperado en extracción"
+                                temp_detailed_status_for_log = f"Failure_iframe_or_embed_extraction_Unexpected_from_{current_mirror_base_url}"
+                        else:
+                            mirror_reason_str = "No se encontró enlace PDF en HTML"
+                            temp_detailed_status_for_log = f"Failure_No_PDF_Link_Found_In_HTML_from_{current_mirror_base_url}"
 
-                print_to_console("===============================================================================================", original_stdout)
-                if current_article_num_for_log < total_articles : time.sleep(user_inter_doi_delay)
-                if download_successful_this_doi and "Google Scholar" in successful_mirror_for_this_doi:
-                     log_entry_detailed_status = f"Success_{successful_mirror_for_this_doi}"
+                        if not pdf_content:
+                            temp_failure_reason_for_log = mirror_reason_str
+                            try:
+                                response = session.get(full_sci_hub_url_for_html_page, timeout=30)
+                                response.raise_for_status()
+                                content_type = response.headers.get('Content-Type', '').lower()
+                                if 'application/pdf' in content_type:
+                                    pdf_content = response.content
+                                    mirror_status_str = "OBTENIDO (Acceso Directo Fallback)"
+                                    mirror_reason_str = ""
+                                    temp_detailed_status_for_log = f"Success_direct_DOI_access_fallback_from_{current_mirror_base_url}"
+                                else:
+                                    mirror_reason_str = f"Content-Type no PDF ({content_type}) en acceso directo"
+                                    temp_detailed_status_for_log = f"Failure_direct_DOI_access_not_pdf_from_{current_mirror_base_url}"
+                            except requests.exceptions.HTTPError as e:
+                                mirror_reason_str = f"HTTPError {e.response.status_code} en acceso directo"
+                                temp_detailed_status_for_log = f"Failure_direct_DOI_access_HTTP{e.response.status_code}_from_{current_mirror_base_url}"
+                            except requests.exceptions.RequestException as e:
+                                mirror_reason_str = "Error de conexión/RequestException en fallback"
+                                temp_detailed_status_for_log = f"Failure_direct_DOI_access_RequestException_from_{current_mirror_base_url}"
+                            except Exception as e:
+                                mirror_reason_str = "Error inesperado en fallback"
+                                temp_detailed_status_for_log = f"Failure_direct_DOI_access_Unexpected_from_{current_mirror_base_url}"
+
+                        specific_reason_for_temp_log = mirror_reason_str
+
+                        log_display_reason_for_sci_hub_attempt = mirror_reason_str
+                        if mirror_status_str == "FALLO":
+                            log_display_reason_for_sci_hub_attempt = full_sci_hub_url_for_html_page
+                            temp_failure_reason_for_log = specific_reason_for_temp_log
+                        else:
+                            temp_failure_reason_for_log = ""
+
+                        mirror_attempts_details_for_doi.append((current_mirror_base_url, mirror_status_str, log_display_reason_for_sci_hub_attempt))
+
+                        if pdf_content:
+                            download_successful_this_doi = True
+                            successful_mirror_for_this_doi = current_mirror_base_url
+                            if mirror_status_str.startswith("OBTENIDO"):
+                                overall_doi_status = mirror_status_str
+                            else:
+                                overall_doi_status = "OBTENIDO"
+                            temp_failure_reason_for_log = ""
+                            break
+                        else:
+                            if mirror_idx < len(mirrors_to_try_for_this_doi) - 1:
+                                time.sleep(user_mirror_switch_delay)
+
+                    if not pdf_content and driver:
+                        print(f"INFO: DOI {doi} - Attempting Google Scholar (Selenium method)...")
+                        gs_selenium_pdf_content, gs_selenium_status_msg = download_with_selenium_google_scholar(driver, doi, effective_title)
+                        if gs_selenium_pdf_content:
+                            pdf_content = gs_selenium_pdf_content
+                            download_successful_this_doi = True
+                            successful_mirror_for_this_doi = "Google Scholar (Selenium)"
+                            overall_doi_status = gs_selenium_status_msg
+                            mirror_attempts_details_for_doi.append(("Google Scholar (Selenium)", "OBTENIDO", gs_selenium_status_msg))
+                            temp_detailed_status_for_log = f"Success_GoogleScholar_Selenium_{gs_selenium_status_msg}"
+                            temp_failure_reason_for_log = ""
+                        else:
+                            mirror_attempts_details_for_doi.append(("Google Scholar (Selenium)", "FALLO", gs_selenium_status_msg))
+                            temp_failure_reason_for_log = gs_selenium_status_msg
+                            temp_detailed_status_for_log = f"Failure_GoogleScholar_Selenium_{gs_selenium_status_msg}"
+
+                    if not pdf_content and driver:
+                        print(f"INFO: DOI {doi} - Attempting PubMed Central (Selenium method)...")
+                        pmc_selenium_pdf_content, pmc_selenium_status_msg = download_with_selenium_pmc(driver, doi, effective_title)
+                        if pmc_selenium_pdf_content:
+                            pdf_content = pmc_selenium_pdf_content
+                            download_successful_this_doi = True
+                            successful_mirror_for_this_doi = pmc_selenium_status_msg
+                            overall_doi_status = pmc_selenium_status_msg
+                            mirror_attempts_details_for_doi.append(("PubMed Central (Selenium)", "OBTENIDO", pmc_selenium_status_msg))
+                            temp_detailed_status_for_log = f"Success_PubMedCentral_Selenium_{pmc_selenium_status_msg}"
+                            temp_failure_reason_for_log = ""
+                        else:
+                            mirror_attempts_details_for_doi.append(("PubMed Central (Selenium)", "FALLO", pmc_selenium_status_msg))
+                            temp_failure_reason_for_log = pmc_selenium_status_msg
+                            temp_detailed_status_for_log = f"Failure_PubMedCentral_Selenium_{pmc_selenium_status_msg}"
+
+                    end_time = datetime.now()
+                    if download_successful_this_doi and pdf_content:
+                        successful_downloads += 1
+                        if not overall_doi_status.startswith("OBTENIDO"):
+                            overall_doi_status = "OBTENIDO"
+                        data_for_successful_sheet = original_row_data.copy()
+                        data_for_successful_sheet['Successful_Mirror'] = successful_mirror_for_this_doi
+                        successful_articles_data.append(data_for_successful_sheet)
+                        temp_dir = "temp_scihub_pdfs"
+                        if not os.path.exists(temp_dir):
+                            os.makedirs(temp_dir)
+                        temp_pdf_path = os.path.join(temp_dir, f"temp_{os.getpid()}_{index}_{pdf_filename_in_zip}")
+                        with open(temp_pdf_path, 'wb') as f:
+                            f.write(pdf_content)
+                        try:
+                            total_downloaded_size_bytes += os.path.getsize(temp_pdf_path)
+                        except OSError as e:
+                            print(f"Advertencia: tamaño temp {temp_pdf_path}: {e}")
+                        zf.write(temp_pdf_path, arcname=pdf_filename_in_zip)
+                        temp_pdf_paths.append(temp_pdf_path)
+                    else:
+                        overall_doi_status = "FALTANTE"
+                        failed_articles_data.append({**original_row_data, 'Failure_Reason': temp_failure_reason_for_log, 'Detailed_Status': temp_detailed_status_for_log, 'original_index': index})
+
+                    format_and_log_article_status(original_row_data, doi, effective_title, current_article_num_for_log, total_articles, successful_downloads, mirror_attempts_details_for_doi, overall_doi_status, user_inter_doi_delay, failed_articles_data_len=len(failed_articles_data))
+
+                    log_entry_failure_reason = temp_failure_reason_for_log if not download_successful_this_doi else ""
+                    log_entry_detailed_status = temp_detailed_status_for_log if not download_successful_this_doi else f"Success_{successful_mirror_for_this_doi}"
+                    all_articles_log.append({**original_row_data, 'Start_Time': start_time.strftime("%Y-%m-%d %H:%M:%S"), 'End_Time': end_time.strftime("%Y-%m-%d %H:%M:%S"), 'Duration_Seconds': (end_time - start_time).total_seconds(), 'Detailed_Status': log_entry_detailed_status, 'Failure_Reason': log_entry_failure_reason, 'Successful_Mirror': successful_mirror_for_this_doi})
+
+                    queue.put({'type': 'progress', 'searched': index + 1, 'found': successful_downloads})
+
+                    print_to_console("===============================================================================================", original_stdout)
+                    if current_article_num_for_log < total_articles:
+                        time.sleep(user_inter_doi_delay)
+                    if download_successful_this_doi and "Google Scholar" in successful_mirror_for_this_doi:
+                        log_entry_detailed_status = f"Success_{successful_mirror_for_this_doi}"
 
         except FileNotFoundError as e:
             print(f"Error crítico: No se pudo crear ZIP (Directorio no encontrado): {zip_path}")
@@ -1220,15 +1263,12 @@ def download_pdfs_from_file(config, queue):
             queue.put({'type': 'error', 'message': f"Error inesperado: {e}"})
             return
 
-
         # --- Retry Phase ---
         if failed_articles_data:
             print("\n--- Iniciando Fase de Reintento para Artículos Fallidos ---")
-
         articles_successfully_retried_ids = []
         temp_failed_articles_data_for_iteration = list(failed_articles_data)
         mirrors_for_retry = list(user_defined_mirrors)
-
         for retry_idx, failed_article_entry in enumerate(temp_failed_articles_data_for_iteration):
             original_index_for_retry = failed_article_entry.get('original_index', -1)
             current_article_num_for_log_retry = original_index_for_retry + 1 if original_index_for_retry != -1 else retry_idx + 1
@@ -1322,16 +1362,23 @@ def download_pdfs_from_file(config, queue):
                 if not overall_retry_status.startswith("OBTENIDO"):
                      overall_retry_status = "OBTENIDO"
                 articles_successfully_retried_ids.append(doi_to_retry)
-                original_data_for_success = {k: v for k, v in failed_article_entry.items() if k not in ['Failure_Reason', 'Detailed_Status', 'original_index']}; original_data_for_success['Successful_Mirror'] = successful_mirror_for_retry; successful_articles_data.append(original_data_for_success)
-                temp_dir_retry = "temp_scihub_pdfs";
+                original_data_for_success = {k: v for k, v in failed_article_entry.items() if k not in ['Failure_Reason', 'Detailed_Status', 'original_index']}
+                original_data_for_success['Successful_Mirror'] = successful_mirror_for_retry
+                successful_articles_data.append(original_data_for_success)
+                temp_dir_retry = "temp_scihub_pdfs"
                 if not os.path.exists(temp_dir_retry): os.makedirs(temp_dir_retry)
                 temp_pdf_path_retry = os.path.join(temp_dir_retry, f"temp_RETRY_{os.getpid()}_{retry_idx}_{pdf_filename_in_zip_retry}")
-                with open(temp_pdf_path_retry, 'wb') as f: f.write(pdf_content_retry)
-                try: total_downloaded_size_bytes += os.path.getsize(temp_pdf_path_retry)
-                except OSError as e: print(f"Advertencia: tamaño temp (reintento) {temp_pdf_path_retry}: {e}")
+                with open(temp_pdf_path_retry, 'wb') as f:
+                    f.write(pdf_content_retry)
                 try:
-                    with zipfile.ZipFile(zip_path, 'a', zipfile.ZIP_DEFLATED) as zf_append: zf_append.write(temp_pdf_path_retry, arcname=pdf_filename_in_zip_retry)
-                except Exception as e: print(f"Error CRÍTICO al agregar PDF (reintento) '{pdf_filename_in_zip_retry}' al ZIP: {e}")
+                    total_downloaded_size_bytes += os.path.getsize(temp_pdf_path_retry)
+                except OSError as e:
+                    print(f"Advertencia: tamaño temp (reintento) {temp_pdf_path_retry}: {e}")
+                try:
+                    with zipfile.ZipFile(zip_path, 'a', zipfile.ZIP_DEFLATED) as zf_append:
+                        zf_append.write(temp_pdf_path_retry, arcname=pdf_filename_in_zip_retry)
+                except Exception as e:
+                    print(f"Error CRÍTICO al agregar PDF (reintento) '{pdf_filename_in_zip_retry}' al ZIP: {e}")
                 temp_pdf_paths.append(temp_pdf_path_retry)
                 if original_article_log_entry:
                     original_article_log_entry['Detailed_Status'] = temp_detailed_status_for_retry_log if not ("Google Scholar" in successful_mirror_for_retry) else f"Success_RETRY_GoogleScholar_{successful_mirror_for_retry}"
@@ -1347,14 +1394,19 @@ def download_pdfs_from_file(config, queue):
                     original_article_log_entry['Detailed_Status'] = temp_detailed_status_for_retry_log
                     original_article_log_entry['Failure_Reason'] = temp_failure_reason_for_retry_log
                 for item in failed_articles_data:
-                    if str(item.get('DOI',item.get('doi',''))).strip() == doi_to_retry: item['Failure_Reason'] = temp_failure_reason_for_retry_log; item['Detailed_Status'] = temp_detailed_status_for_retry_log; break
+                    if str(item.get('DOI',item.get('doi',''))).strip() == doi_to_retry:
+                        item['Failure_Reason'] = temp_failure_reason_for_retry_log
+                        item['Detailed_Status'] = temp_detailed_status_for_retry_log
+                        break
             format_and_log_article_status(failed_article_entry, doi_to_retry, effective_title_for_retry, current_article_num_for_log_retry, total_articles, successful_downloads, mirror_attempts_details_for_retry, overall_retry_status, user_inter_doi_delay, is_retry=True, failed_articles_data_len=len(temp_failed_articles_data_for_iteration) - retry_idx)
             print_to_console("===============================================================================================", original_stdout)
-            if retry_idx < len(temp_failed_articles_data_for_iteration) - 1: time.sleep(user_inter_doi_delay)
+            if retry_idx < len(temp_failed_articles_data_for_iteration) - 1:
+                time.sleep(user_inter_doi_delay)
 
-        if articles_successfully_retried_ids: failed_articles_data = [item for item in failed_articles_data if str(item.get('DOI', item.get('doi', ''))).strip() not in articles_successfully_retried_ids]
+        if articles_successfully_retried_ids:
+            failed_articles_data = [item for item in failed_articles_data if str(item.get('DOI', item.get('doi', ''))).strip() not in articles_successfully_retried_ids]
 
-        failed_downloads_summary_list = [{'title': str(item.get('Title',item.get('title','N/A'))).strip(), 'doi': str(item.get('DOI',item.get('doi','N/A'))).strip(), 'reason': str(item.get('Failure_Reason','N/A')).strip()} for item in failed_articles_data]
+        failed_downloads_summary_list = [{'title': str(item.get('Title','N/A')).strip(), 'doi': str(item.get('DOI','N/A')).strip(), 'reason': str(item.get('Failure_Reason','N/A')).strip()} for item in failed_articles_data]
         total_mb = total_downloaded_size_bytes / (1024 * 1024)
 
         summary_message = (f"Proceso completado.\n\nDescargas exitosas: {successful_downloads}\nDescargas fallidas: {len(failed_downloads_summary_list)}\n" f"Tamaño total PDFs: {total_mb:.2f} MB")
@@ -1374,11 +1426,14 @@ def download_pdfs_from_file(config, queue):
                 fa_cols = ['DOI','Title'] + [c for c in original_input_columns if c not in ['DOI','Title','Failure_Reason','Detailed_Status']] + ['Failure_Reason','Detailed_Status','SciHub_Link']
                 ti_cols = ['DOI','Title'] + [c for c in original_input_columns if c not in ['DOI','Title','Successful_Mirror','Start_Time','End_Time','Duration_Seconds','Detailed_Status','Failure_Reason']] + ['Successful_Mirror','Start_Time','End_Time','Duration_Seconds','Detailed_Status','Failure_Reason','SciHub_Link']
                 def create_ordered_df(data, cols):
-                    df_ = pd.DataFrame(data); df_['SciHub_Link'] = df_.apply(lambda r: f"{sci_hub_base_url_for_report}{r.get('DOI',r.get('doi',''))}" if pd.notna(r.get('DOI',r.get('doi',''))) else '', axis=1)
+                    df_ = pd.DataFrame(data)
+                    df_['SciHub_Link'] = df_.apply(lambda r: f"{sci_hub_base_url_for_report}{r.get('DOI',r.get('doi',''))}" if pd.notna(r.get('DOI',r.get('doi',''))) else '', axis=1)
                     for c in cols:
-                        if c not in df_.columns: df_[c] = pd.NA
+                        if c not in df_.columns:
+                            df_[c] = pd.NA
                     all_data_keys = set()
-                    if data: all_data_keys.update(k for item in data for k in item.keys())
+                    if data:
+                        all_data_keys.update(k for item in data for k in item.keys())
                     final_cols_ordered = [c for c in cols if c in all_data_keys or c == 'SciHub_Link']
                     final_cols_ordered.extend([k for k in all_data_keys if k not in final_cols_ordered and k != 'SciHub_Link'])
                     return df_.reindex(columns=final_cols_ordered)
@@ -1387,7 +1442,9 @@ def download_pdfs_from_file(config, queue):
                 df_fallidos = create_ordered_df(failed_articles_data, fa_cols)
                 df_tiempos = create_ordered_df(all_articles_log, ti_cols)
                 with pd.ExcelWriter(excel_report_path_to_use, engine='openpyxl') as writer:
-                    df_obtenidos.to_excel(writer, sheet_name='Obtenidos', index=False); df_fallidos.to_excel(writer, sheet_name='Fallidos', index=False); df_tiempos.to_excel(writer, sheet_name='Tiempos', index=False)
+                    df_obtenidos.to_excel(writer, sheet_name='Obtenidos', index=False)
+                    df_fallidos.to_excel(writer, sheet_name='Fallidos', index=False)
+                    df_tiempos.to_excel(writer, sheet_name='Tiempos', index=False)
                 print(f"Reporte Excel guardado: {excel_report_path_to_use}")
             except Exception as e:
                 print(f"Error guardando reporte Excel: {e}")
@@ -1399,7 +1456,7 @@ def download_pdfs_from_file(config, queue):
 
         print("\n" + "="*50)
         print("--- Archivos Generados ---")
-        if zip_path: # Ensure zip_path is not empty (though it should be if process reached here)
+        if zip_path:
             print(f"Archivo ZIP de PDFs guardado en:")
             print(f"file:///{os.path.abspath(zip_path)}")
 
@@ -1417,10 +1474,8 @@ def download_pdfs_from_file(config, queue):
                 print("WebDriver de Selenium cerrado correctamente.")
             except Exception as e:
                 print(f"Error al cerrar WebDriver de Selenium: {e}")
-        # restored_to_original_console = False # Not needed, stdout not redirected
-        # Ensure stdout is the original, in case it was somehow still a TextRedirector
-        # (though it shouldn't be if TextRedirector class and its usage are commented out)
-        if hasattr(original_stdout, 'write'): # Check if original_stdout was captured
+
+        if hasattr(original_stdout, 'write'):
              if sys.stdout != original_stdout:
                  sys.stdout = original_stdout
                  print("\n--- stdout restaurado a la consola original durante la limpieza final ---", file=original_stdout)
@@ -1436,23 +1491,18 @@ def download_pdfs_from_file(config, queue):
 
         temp_dir_to_check = "temp_scihub_pdfs"
         if os.path.exists(temp_dir_to_check) and not os.listdir(temp_dir_to_check):
-            try: os.rmdir(temp_dir_to_check); print(f"Eliminado dir temp: {temp_dir_to_check}", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
-            except OSError as e: print(f"Error eliminando dir temp {temp_dir_to_check}: {e}", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
+            try:
+                os.rmdir(temp_dir_to_check)
+                print(f"Eliminado dir temp: {temp_dir_to_check}", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
+            except OSError as e:
+                print(f"Error eliminando dir temp {temp_dir_to_check}: {e}", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
 
         print("--- Limpieza Finalizada ---", file=original_stdout if hasattr(original_stdout, 'write') else sys.__stdout__)
 
-        # if log_window: # GUI logging disabled
-        #     try:
-        #         if log_window.winfo_exists(): log_window.destroy()
-        #     except tk.TclError: pass
+def print_to_console(message, orig_stdout):
+    print(message, file=orig_stdout)
 
-        # Destroy the main hidden Tkinter window if it exists
-        if 'root' in locals() and isinstance(root, tk.Tk):
-            try:
-                root.destroy()
-            except tk.TclError:
-                pass
-
+import itertools
 
 if __name__ == "__main__":
     root = tk.Tk()

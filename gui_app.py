@@ -117,55 +117,63 @@ class ProgressFrame(ctk.CTkFrame):
     def __init__(self, parent, controller):
         super().__init__(parent)
         self.controller = controller
-        self.grid_columnconfigure(0, weight=1); self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        # --- TOP ROW ---
+        # --- TOP FRAME: Current Article & Time KPIs ---
         top_frame = ctk.CTkFrame(self, fg_color="transparent")
-        top_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
-        top_frame.grid_columnconfigure(1, weight=1)
+        top_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=5)
+        top_frame.grid_columnconfigure(0, weight=1); top_frame.grid_columnconfigure(1, weight=1)
 
         self.current_article_frame = ctk.CTkFrame(top_frame)
-        self.current_article_frame.grid(row=0, column=0, sticky="w", padx=(0,10))
+        self.current_article_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        self.current_article_frame.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(self.current_article_frame, text="Procesando Artículo:", font=ctk.CTkFont(size=14, weight="bold")).pack(padx=10, pady=(5,0), anchor="w")
         self.current_article_num_label = ctk.CTkLabel(self.current_article_frame, text="Artículo: --/--", anchor="w"); self.current_article_num_label.pack(padx=10, pady=2, anchor="w")
-        self.current_title_label = ctk.CTkLabel(self.current_article_frame, text="Título: --", anchor="w", wraplength=350, justify="left"); self.current_title_label.pack(padx=10, pady=2, anchor="w")
+        self.current_title_label = ctk.CTkLabel(self.current_article_frame, text="Título: --", anchor="w", wraplength=400, justify="left"); self.current_title_label.pack(padx=10, pady=2, anchor="w")
         self.current_author_label = ctk.CTkLabel(self.current_article_frame, text="Autor: --", anchor="w"); self.current_author_label.pack(padx=10, pady=2, anchor="w")
         self.current_journal_label = ctk.CTkLabel(self.current_article_frame, text="Revista: --", anchor="w"); self.current_journal_label.pack(padx=10, pady=2, anchor="w")
         self.current_year_label = ctk.CTkLabel(self.current_article_frame, text="Año: --", anchor="w"); self.current_year_label.pack(padx=10, pady=2, anchor="w")
         self.current_doi_label = ctk.CTkLabel(self.current_article_frame, text="DOI: --", anchor="w"); self.current_doi_label.pack(padx=10, pady=(2,5), anchor="w")
 
-        time_kpi_frame = ctk.CTkFrame(top_frame); time_kpi_frame.grid(row=0, column=1, sticky="nsew")
+        time_kpi_frame = ctk.CTkFrame(top_frame); time_kpi_frame.grid(row=0, column=1, sticky="nsew", padx=(5,0))
         time_kpi_frame.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(time_kpi_frame, text="Métricas de Tiempo", font=ctk.CTkFont(weight="bold")).pack(pady=5)
         self.time_elapsed_label = ctk.CTkLabel(time_kpi_frame, text="Transcurrido: 00:00:00"); self.time_elapsed_label.pack(pady=2)
         self.time_avg_label = ctk.CTkLabel(time_kpi_frame, text="Promedio/DOI: -- s"); self.time_avg_label.pack(pady=2)
         self.time_etr_label = ctk.CTkLabel(time_kpi_frame, text="Tiempo Restante: --:--:--"); self.time_etr_label.pack(pady=(2,5))
 
-        # --- LEFT COLUMN (Article List & Log) ---
-        left_column_frame = ctk.CTkFrame(self, fg_color="transparent")
-        left_column_frame.grid(row=1, column=0, rowspan=2, sticky="nsew", padx=(10,5), pady=5)
-        left_column_frame.grid_rowconfigure(0, weight=1); left_column_frame.grid_columnconfigure(0, weight=1)
+        # --- MAIN CONTENT FRAME ---
+        main_content_frame = ctk.CTkFrame(self, fg_color="transparent")
+        main_content_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
+        main_content_frame.grid_columnconfigure(0, weight=1); main_content_frame.grid_columnconfigure(1, weight=1)
+        main_content_frame.grid_rowconfigure(0, weight=1)
 
-        self.article_list_frame = ctk.CTkScrollableFrame(left_column_frame, label_text="Lista de Artículos"); self.article_list_frame.grid(row=0, column=0, sticky="nsew")
+        self.article_list_frame = ctk.CTkScrollableFrame(main_content_frame, label_text="Lista de Artículos"); self.article_list_frame.grid(row=0, column=0, sticky="nsew", padx=(0,5))
         self.article_widgets = {}
-        self.log_textbox = ctk.CTkTextbox(left_column_frame, height=150); self.log_textbox.grid(row=1, column=0, sticky="ew", pady=(10,0)); self.log_textbox.configure(state="disabled")
 
-        # --- RIGHT COLUMN (Charts & Controls) ---
-        right_column_frame = ctk.CTkFrame(self, fg_color="transparent")
-        right_column_frame.grid(row=1, column=1, sticky="nsew", padx=(5,10), pady=5)
-        right_column_frame.grid_columnconfigure(0, weight=1); right_column_frame.grid_rowconfigure(2, weight=1)
-
-        self.chart1_frame = ctk.CTkFrame(right_column_frame); self.chart1_frame.grid(row=0, column=0, sticky="nsew", pady=(0,5))
-        self.chart2_frame = ctk.CTkFrame(right_column_frame); self.chart2_frame.grid(row=1, column=0, sticky="nsew", pady=5)
-        self.chart3_frame = ctk.CTkFrame(right_column_frame); self.chart3_frame.grid(row=2, column=0, sticky="nsew", pady=(5,0))
+        charts_parent_frame = ctk.CTkFrame(main_content_frame, fg_color="transparent"); charts_parent_frame.grid(row=0, column=1, sticky="nsew", padx=(5,0))
+        charts_parent_frame.grid_columnconfigure(0, weight=1); charts_parent_frame.grid_rowconfigure((0,1,2), weight=1)
+        self.chart1_frame = ctk.CTkFrame(charts_parent_frame); self.chart1_frame.grid(row=0, column=0, sticky="nsew", pady=(0,5))
+        self.chart2_frame = ctk.CTkFrame(charts_parent_frame); self.chart2_frame.grid(row=1, column=0, sticky="nsew", pady=5)
+        self.chart3_frame = ctk.CTkFrame(charts_parent_frame); self.chart3_frame.grid(row=2, column=0, sticky="nsew", pady=(5,0))
         self.chart1_canvas = self.chart2_canvas = self.chart3_canvas = None
 
-        controls_frame = ctk.CTkFrame(self); controls_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=10)
-        controls_frame.grid_columnconfigure(0, weight=1)
-        self.progress_bar = ctk.CTkProgressBar(controls_frame); self.progress_bar.grid(row=0, column=0, padx=10, pady=10, sticky="ew"); self.progress_bar.set(0)
-        self.progress_label = ctk.CTkLabel(controls_frame, text="Procesando 0 de 0... (0%)"); self.progress_label.grid(row=1, column=0, padx=10, pady=(0, 10))
-        self.pause_button = ctk.CTkButton(controls_frame, text="Pausar", command=self.controller.toggle_pause); self.pause_button.grid(row=2, column=0, padx=5, pady=5)
-        self.cancel_button = ctk.CTkButton(controls_frame, text="Cancelar", fg_color="red", hover_color="darkred", command=self.controller.cancel_download); self.cancel_button.grid(row=3, column=0, padx=5, pady=5)
+        # --- LOG FRAME ---
+        log_frame = ctk.CTkFrame(self); log_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=5)
+        log_frame.grid_columnconfigure(0, weight=1)
+        self.log_textbox = ctk.CTkTextbox(log_frame, height=120); self.log_textbox.grid(row=0, column=0, sticky="ew"); self.log_textbox.configure(state="disabled")
+
+        # --- BOTTOM FRAME ---
+        bottom_frame = ctk.CTkFrame(self); bottom_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=10)
+        bottom_frame.grid_columnconfigure(0, weight=1)
+        self.progress_bar = ctk.CTkProgressBar(bottom_frame); self.progress_bar.grid(row=0, column=0, padx=10, pady=5, sticky="ew"); self.progress_bar.set(0)
+        self.progress_label = ctk.CTkLabel(bottom_frame, text="Procesando 0 de 0... (0%)"); self.progress_label.grid(row=1, column=0, padx=10, pady=(0, 5))
+
+        controls_frame = ctk.CTkFrame(bottom_frame, fg_color="transparent"); controls_frame.pack(fill="x", expand=True, pady=5)
+        controls_frame.grid_columnconfigure((0,1), weight=1)
+        self.pause_button = ctk.CTkButton(controls_frame, text="Pausar", command=self.controller.toggle_pause); self.pause_button.grid(row=0, column=0, padx=5)
+        self.cancel_button = ctk.CTkButton(controls_frame, text="Cancelar", fg_color="red", hover_color="darkred", command=self.controller.cancel_download); self.cancel_button.grid(row=0, column=1, padx=5)
 
     def reset_ui(self, total_articles):
         # ... (Implementation in next step)
@@ -191,8 +199,92 @@ class ProgressFrame(ctk.CTkFrame):
         self.pause_button.configure(state="disabled"); self.cancel_button.configure(state="disabled")
 
 class ResultsFrame(ctk.CTkFrame):
-    # ... (Implementation in next step)
-    pass
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+        self.results_data = {}
+        self.grid_columnconfigure(0, weight=1); self.grid_rowconfigure(2, weight=1)
+
+        self.summary_label = ctk.CTkLabel(self, text="", font=ctk.CTkFont(size=20, weight="bold")); self.summary_label.grid(row=0, column=0, padx=20, pady=10)
+
+        charts_parent_frame = ctk.CTkFrame(self, fg_color="transparent"); charts_parent_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
+        charts_parent_frame.grid_columnconfigure((0,1,2), weight=1)
+        self.chart1_frame = ctk.CTkFrame(charts_parent_frame); self.chart1_frame.grid(row=0, column=0, sticky="nsew", padx=5)
+        self.chart2_frame = ctk.CTkFrame(charts_parent_frame); self.chart2_frame.grid(row=0, column=1, sticky="nsew", padx=5)
+        self.chart3_frame = ctk.CTkFrame(charts_parent_frame); self.chart3_frame.grid(row=0, column=2, sticky="nsew", padx=5)
+        self.chart1_canvas = self.chart2_canvas = self.chart3_canvas = None
+
+        self.tab_view = ctk.CTkTabview(self); self.tab_view.grid(row=2, column=0, padx=20, pady=10, sticky="nsew")
+        self.tab_view.add("Obtenidos"); self.tab_view.add("Fallidos")
+        self.obtained_frame = ctk.CTkScrollableFrame(self.tab_view.tab("Obtenidos")); self.obtained_frame.pack(fill="both", expand=True)
+        self.failed_frame = ctk.CTkScrollableFrame(self.tab_view.tab("Fallidos")); self.failed_frame.pack(fill="both", expand=True)
+        self.copy_failed_button = ctk.CTkButton(self.tab_view.tab("Fallidos"), text="Copiar DOIs fallidos", command=self.copy_failed_dois); self.copy_failed_button.pack(pady=10)
+
+        actions_frame = ctk.CTkFrame(self); actions_frame.grid(row=3, column=0, padx=20, pady=20, sticky="ew")
+        actions_frame.grid_columnconfigure((0,1,2), weight=1)
+        self.open_folder_button = ctk.CTkButton(actions_frame, text="📂 Abrir Carpeta de Descarga", command=self.open_download_folder); self.open_folder_button.grid(row=0, column=0, padx=5, pady=10)
+        self.open_report_button = ctk.CTkButton(actions_frame, text="🧾 Ver Reporte en Excel", command=self.open_excel_report); self.open_report_button.grid(row=0, column=1, padx=5, pady=10)
+        self.new_task_button = ctk.CTkButton(actions_frame, text="🔄 Iniciar una Nueva Tarea", command=lambda: controller.show_frame("ConfigFrame")); self.new_task_button.grid(row=0, column=2, padx=5, pady=10)
+
+    def update_results(self, results):
+        self.results_data = results
+        total = results['total_articles']; success = results['successful_count']
+        msg = "¡Proceso Completado!" if not results['was_cancelled'] else "Proceso Cancelado"
+        self.summary_label.configure(text=f"{msg} Se obtuvieron {success} de {total} artículos.")
+
+        for widget in self.obtained_frame.winfo_children(): widget.destroy()
+        for item in results['successful_articles']: ctk.CTkLabel(self.obtained_frame, text=f"✅ {item['data'].get('title', item['data']['doi'])} (Fuente: {item['source']})").pack(anchor="w", padx=5)
+
+        for widget in self.failed_frame.winfo_children(): widget.destroy()
+        for item in results['failed_articles']: ctk.CTkLabel(self.failed_frame, text=f"❌ {item['data'].get('title', item['data']['doi'])} (Razón: {item['reason']})").pack(anchor="w", padx=5)
+        self.copy_failed_button.pack_forget() if not results['failed_articles'] else self.copy_failed_button.pack(pady=10)
+
+        self.open_report_button.configure(state="normal" if results['excel_report_path'] else "disabled")
+        # Call chart creation methods
+        self.update_final_charts(results)
+
+    def update_final_charts(self, results):
+        # Chart 1
+        pending_count = results['total_articles'] - results['successful_count'] - results['failed_count']
+        chart1_data = {'title': 'Progreso General', 'labels': ['Obtenidos', 'Fallidos', 'Pendientes'], 'sizes': [results['successful_count'], results['failed_count'], pending_count], 'colors': ['#34A853', '#EA4335', 'grey']}
+        self.chart1_canvas = self._create_chart(self.chart1_frame, self.chart1_canvas, chart1_data)
+        # Chart 2
+        chart2_data = {'title': 'Tasa de Éxito (de Procesados)', 'labels': ['Obtenidos', 'Fallidos'], 'sizes': [results['successful_count'], results['failed_count']], 'colors': ['#34A853', '#EA4335']}
+        self.chart2_canvas = self._create_chart(self.chart2_frame, self.chart2_canvas, chart2_data)
+        # Chart 3
+        source_counts = results.get('source_counts', Counter())
+        if results['failed_count'] > 0: source_counts['Fallidos'] = results['failed_count']
+        chart3_data = {'title': 'Desglose de Resultados', 'labels': list(source_counts.keys()), 'sizes': list(source_counts.values()), 'wedgeprops': dict(width=0.4)}
+        self.chart3_canvas = self._create_chart(self.chart3_frame, self.chart3_canvas, chart3_data)
+
+    def _create_chart(self, frame, canvas, chart_data):
+        if canvas: canvas.get_tk_widget().destroy()
+        for widget in frame.winfo_children(): widget.destroy()
+        if not chart_data['sizes'] or sum(chart_data['sizes']) == 0:
+            ctk.CTkLabel(frame, text=f"{chart_data['title']}\n(No hay datos)").pack(expand=True); return
+        is_dark = ctk.get_appearance_mode() == "Dark"; bg_color = frame.cget("fg_color")[1]; text_color = "#FFFFFF" if is_dark else "#000000"
+        fig = Figure(figsize=(4, 2.5), dpi=100, facecolor=bg_color)
+        ax = fig.add_subplot(111)
+        wedges, texts, autotexts = ax.pie(chart_data['sizes'], autopct='%1.1f%%', startangle=90, colors=chart_data.get('colors'), wedgeprops=chart_data.get('wedgeprops', {}), textprops={'color': text_color, 'fontsize': 8})
+        ax.legend(wedges, chart_data['labels'], title="Categorías", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1), prop={'size': 8}, title_fontproperties={'size':9, 'weight':'bold', 'color':text_color}, labelcolor=text_color)
+        ax.set_title(chart_data['title'], color=text_color, fontsize=10)
+        fig.tight_layout(pad=1.5)
+        new_canvas = FigureCanvasTkAgg(fig, master=frame); new_canvas.draw(); new_canvas.get_tk_widget().pack(side=ctk.TOP, fill=ctk.BOTH, expand=True)
+        return new_canvas
+
+    def copy_failed_dois(self):
+        failed_dois = [item['data']['doi'] for item in self.results_data.get('failed_articles', []) if item['data']['doi']]
+        if failed_dois: self.clipboard_clear(); self.clipboard_append("\n".join(failed_dois)); self.controller.show_info("Copiado", f"{len(failed_dois)} DOIs fallidos copiados al portapapeles.")
+
+    def open_path(self, path):
+        if not path or not os.path.exists(path): self.controller.show_error("Error", f"La ruta no existe o no fue especificada:\n{path}"); return
+        try:
+            if platform.system() == "Windows": os.startfile(os.path.dirname(path) if os.path.isfile(path) else path)
+            elif platform.system() == "Darwin": subprocess.run(["open", path if os.path.isdir(path) else os.path.dirname(path)])
+            else: subprocess.run(["xdg-open", path if os.path.isdir(path) else os.path.dirname(path)])
+        except Exception as e: self.controller.show_error("Error al abrir", f"No se pudo abrir la ruta:\n{e}")
+    def open_download_folder(self): self.open_path(self.results_data.get('zip_path'))
+    def open_excel_report(self): self.open_path(self.results_data.get('excel_report_path'))
 class App(ctk.CTk):
     # ... (Implementation in next step)
     pass

@@ -118,7 +118,7 @@ class ProgressFrame(ctk.CTkFrame):
         bottom_frame.grid_columnconfigure(0, weight=1)
         self.progress_bar = ctk.CTkProgressBar(bottom_frame); self.progress_bar.grid(row=0, column=0, padx=10, pady=5, sticky="ew"); self.progress_bar.set(0)
         self.progress_label = ctk.CTkLabel(bottom_frame, text="Procesando 0 de 0... (0%)"); self.progress_label.grid(row=1, column=0, padx=10, pady=(0, 5))
-        controls_frame = ctk.CTkFrame(bottom_frame, fg_color="transparent"); controls_frame.pack(fill="x", expand=True, pady=5)
+        controls_frame = ctk.CTkFrame(bottom_frame, fg_color="transparent"); controls_frame.grid(row=2, column=0, sticky="ew", pady=5)
         controls_frame.grid_columnconfigure((0,1), weight=1)
         self.pause_button = ctk.CTkButton(controls_frame, text="Pausar", command=self.controller.toggle_pause); self.pause_button.grid(row=0, column=0, padx=5)
         self.cancel_button = ctk.CTkButton(controls_frame, text="Cancelar", fg_color="red", hover_color="darkred", command=self.controller.cancel_download); self.cancel_button.grid(row=0, column=1, padx=5)

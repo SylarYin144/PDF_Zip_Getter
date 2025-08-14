@@ -7,6 +7,7 @@ import queue
 import platform
 import subprocess
 import time
+import json
 from scihub_downloader import download_pdfs_from_file, DEFAULT_SCI_HUB_MIRRORS_EXAMPLE
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -26,29 +27,72 @@ class ConfigFrame(ctk.CTkFrame):
         io_frame = ctk.CTkFrame(self); io_frame.grid(row=0, column=0, padx=20, pady=20, sticky="nsew"); io_frame.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(io_frame, text="1. Archivos de Entrada y Salida", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=(10, 5), sticky="w")
         self.select_file_button = ctk.CTkButton(io_frame, text="Seleccionar Archivo (.xlsx, .csv)", command=self.select_input_file); self.select_file_button.grid(row=1, column=0, padx=10, pady=10, sticky="w")
-        self.file_info_label = ctk.CTkLabel(io_frame, text="No se ha cargado ningún archivo."); self.file_info_label.grid(row=1, column=1, padx=10, pady=10, sticky="w")
+        self.file_info_label = ctk.CTkLabel(io_frame, text=""); self.file_info_label.grid(row=1, column=1, padx=10, pady=10, sticky="w")
         self.select_zip_button = ctk.CTkButton(io_frame, text="Definir Ubicación del ZIP", command=self.select_zip_location); self.select_zip_button.grid(row=2, column=0, padx=10, pady=10, sticky="w")
-        self.zip_path_label = ctk.CTkLabel(io_frame, text="No se ha seleccionado la ubicación."); self.zip_path_label.grid(row=3, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="w")
+        self.zip_path_label = ctk.CTkLabel(io_frame, text=""); self.zip_path_label.grid(row=3, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="w")
         sources_frame = ctk.CTkFrame(self); sources_frame.grid(row=1, column=0, padx=20, pady=20, sticky="nsew")
         ctk.CTkLabel(sources_frame, text="2. Fuentes de Descarga", font=ctk.CTkFont(weight="bold")).pack(padx=10, pady=(10, 5), anchor="w")
-        self.check_scihub = ctk.CTkCheckBox(sources_frame, text="Usar Sci-Hub"); self.check_scihub.pack(padx=10, pady=5, anchor="w"); self.check_scihub.select()
-        self.check_gscholar = ctk.CTkCheckBox(sources_frame, text="Usar Google Scholar"); self.check_gscholar.pack(padx=10, pady=5, anchor="w"); self.check_gscholar.select()
-        self.check_pmc = ctk.CTkCheckBox(sources_frame, text="Usar PubMed Central (PMC)"); self.check_pmc.pack(padx=10, pady=(5, 10), anchor="w"); self.check_pmc.select()
+        self.check_scihub = ctk.CTkCheckBox(sources_frame, text="Usar Sci-Hub"); self.check_scihub.pack(padx=10, pady=5, anchor="w")
+        self.check_gscholar = ctk.CTkCheckBox(sources_frame, text="Usar Google Scholar"); self.check_gscholar.pack(padx=10, pady=5, anchor="w")
+        self.check_pmc = ctk.CTkCheckBox(sources_frame, text="Usar PubMed Central (PMC)"); self.check_pmc.pack(padx=10, pady=(5, 10), anchor="w")
         adv_frame = ctk.CTkFrame(self); adv_frame.grid(row=0, column=1, rowspan=2, padx=20, pady=20, sticky="nsew")
         adv_frame.grid_columnconfigure(0, weight=1); adv_frame.grid_rowconfigure(2, weight=1)
         ctk.CTkLabel(adv_frame, text="3. Configuración Avanzada", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=(10, 5), sticky="w")
         ctk.CTkLabel(adv_frame, text="Mirrors de Sci-Hub (separados por coma):").grid(row=1, column=0, columnspan=2, padx=10, pady=(5,0), sticky="w")
-        self.mirrors_textbox = ctk.CTkTextbox(adv_frame); self.mirrors_textbox.grid(row=2, column=0, columnspan=2, padx=10, pady=5, sticky="nsew"); self.mirrors_textbox.insert("1.0", ",\n".join(DEFAULT_SCI_HUB_MIRRORS_EXAMPLE))
+        self.mirrors_textbox = ctk.CTkTextbox(adv_frame); self.mirrors_textbox.grid(row=2, column=0, columnspan=2, padx=10, pady=5, sticky="nsew")
         ctk.CTkLabel(adv_frame, text="Tiempo de espera entre DOIs (s):").grid(row=3, column=0, padx=10, pady=(10, 0), sticky="w")
-        self.delay_entry = ctk.CTkEntry(adv_frame, width=80); self.delay_entry.grid(row=3, column=1, padx=10, pady=(10,0), sticky="e"); self.delay_entry.insert(0, "2")
+        self.delay_entry = ctk.CTkEntry(adv_frame, width=80); self.delay_entry.grid(row=3, column=1, padx=10, pady=(10,0), sticky="e")
         ctk.CTkLabel(adv_frame, text="Timeout Carga de Página (s):").grid(row=4, column=0, padx=10, pady=(10, 0), sticky="w")
-        self.page_load_timeout_entry = ctk.CTkEntry(adv_frame, width=80); self.page_load_timeout_entry.grid(row=4, column=1, padx=10, pady=(10,0), sticky="e"); self.page_load_timeout_entry.insert(0, "60")
+        self.page_load_timeout_entry = ctk.CTkEntry(adv_frame, width=80); self.page_load_timeout_entry.grid(row=4, column=1, padx=10, pady=(10,0), sticky="e")
         ctk.CTkLabel(adv_frame, text="Timeout Búsqueda Elemento (s):").grid(row=5, column=0, padx=10, pady=(10, 0), sticky="w")
-        self.element_wait_timeout_entry = ctk.CTkEntry(adv_frame, width=80); self.element_wait_timeout_entry.grid(row=5, column=1, padx=10, pady=(10,0), sticky="e"); self.element_wait_timeout_entry.insert(0, "20")
+        self.element_wait_timeout_entry = ctk.CTkEntry(adv_frame, width=80); self.element_wait_timeout_entry.grid(row=5, column=1, padx=10, pady=(10,0), sticky="e")
         report_frame = ctk.CTkFrame(self); report_frame.grid(row=2, column=0, padx=20, pady=20, sticky="w")
         self.report_button = ctk.CTkButton(report_frame, text="Definir Ruta de Reporte (.xlsx)", command=self.select_excel_report_path); self.report_button.pack(side="left", padx=(10,5), pady=10)
-        self.report_path_label = ctk.CTkLabel(report_frame, text="No se generará reporte."); self.report_path_label.pack(side="left", padx=5, pady=10)
-        self.start_button = ctk.CTkButton(self, text="🚀 Iniciar Descarga", command=self.start_download, font=ctk.CTkFont(size=16)); self.start_button.grid(row=3, column=0, columnspan=2, padx=20, pady=20, sticky="ew"); self.start_button.configure(state="disabled")
+        self.report_path_label = ctk.CTkLabel(report_frame, text=""); self.report_path_label.pack(side="left", padx=5, pady=10)
+        self.start_button = ctk.CTkButton(self, text="🚀 Iniciar Descarga", command=self.start_download, font=ctk.CTkFont(size=16)); self.start_button.grid(row=3, column=0, columnspan=2, padx=20, pady=20, sticky="ew")
+        self.load_config()
+        self._check_start_conditions()
+
+    def load_config(self):
+        try:
+            with open("config.json", "r") as f:
+                config = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            config = {}
+        self.input_file_path = config.get("input_file_path", "")
+        if self.input_file_path and os.path.exists(self.input_file_path):
+            try:
+                df = pd.read_csv(self.input_file_path, dtype=str) if self.input_file_path.endswith('.csv') else pd.read_excel(self.input_file_path, dtype=str)
+                df.fillna('', inplace=True); df.rename(columns={col: col.lower() for col in df.columns}, inplace=True)
+                if 'doi' not in df.columns: raise ValueError("El archivo no contiene la columna 'DOI'.")
+                self.file_info_label.configure(text=f"{os.path.basename(self.input_file_path)} ({len(df)} artículos detectados)")
+                self.controller.input_df = df
+            except Exception as e:
+                self.file_info_label.configure(text=f"Ruta guardada, pero error al cargar: {e}", text_color="orange")
+                self.input_file_path = ""; self.controller.input_df = None
+        else:
+            self.file_info_label.configure(text="No se ha cargado ningún archivo.")
+        self.zip_file_path = config.get("zip_file_path", "")
+        self.zip_path_label.configure(text=f"Se guardará en: {self.zip_file_path}" if self.zip_file_path else "No se ha seleccionado la ubicación.")
+        self.excel_report_path = config.get("excel_report_path", "")
+        self.report_path_label.configure(text=f"Reporte se guardará en: {self.excel_report_path}" if self.excel_report_path else "No se generará reporte.")
+        self.check_scihub.set(config.get("use_scihub", 1))
+        self.check_gscholar.set(config.get("use_gscholar", 1))
+        self.check_pmc.set(config.get("use_pmc", 1))
+        self.mirrors_textbox.delete("1.0", "end")
+        self.mirrors_textbox.insert("1.0", config.get("mirrors", ",\n".join(DEFAULT_SCI_HUB_MIRRORS_EXAMPLE)))
+        self.delay_entry.delete(0, "end"); self.delay_entry.insert(0, str(config.get("delay", "2")))
+        self.page_load_timeout_entry.delete(0, "end"); self.page_load_timeout_entry.insert(0, str(config.get("page_load_timeout", "60")))
+        self.element_wait_timeout_entry.delete(0, "end"); self.element_wait_timeout_entry.insert(0, str(config.get("element_wait_timeout", "20")))
+
+    def save_config(self):
+        config = {"input_file_path": self.input_file_path, "zip_file_path": self.zip_file_path, "excel_report_path": self.excel_report_path, "use_scihub": self.check_scihub.get(), "use_gscholar": self.check_gscholar.get(), "use_pmc": self.check_pmc.get(), "mirrors": self.mirrors_textbox.get("1.0", "end-1c"), "delay": self.delay_entry.get(), "page_load_timeout": self.page_load_timeout_entry.get(), "element_wait_timeout": self.element_wait_timeout_entry.get()}
+        try:
+            with open("config.json", "w") as f:
+                json.dump(config, f, indent=4)
+        except Exception as e:
+            print(f"Advertencia: No se pudo guardar el archivo de configuración. {e}")
+
     def select_input_file(self):
         path = filedialog.askopenfilename(title="Seleccionar archivo con DOIs", filetypes=(("Archivos Excel", "*.xlsx *.xls"), ("Archivos CSV", "*.csv")))
         if not path: return
@@ -61,18 +105,23 @@ class ConfigFrame(ctk.CTkFrame):
             self.controller.input_df = df
         except Exception as e: self.file_info_label.configure(text=f"Error al leer archivo: {e}", text_color="red"); self.input_file_path = ""
         self._check_start_conditions()
+
     def select_zip_location(self):
         path = filedialog.asksaveasfilename(title="Guardar archivo ZIP como...", defaultextension=".zip", filetypes=(("Archivos ZIP", "*.zip"),))
         if not path: return
         self.zip_file_path = path; self.zip_path_label.configure(text=f"Se guardará en: {path}"); self._check_start_conditions()
+
     def select_excel_report_path(self):
         path = filedialog.asksaveasfilename(title="Guardar Reporte Excel como...", defaultextension=".xlsx", filetypes=(("Archivos Excel", "*.xlsx"),))
         if not path: self.excel_report_path = ""; self.report_path_label.configure(text="No se generará reporte.")
         else: self.excel_report_path = path; self.report_path_label.configure(text=f"Reporte se guardará en: {path}")
+
     def _check_start_conditions(self):
         if self.input_file_path and self.zip_file_path and self.controller.input_df is not None: self.start_button.configure(state="normal")
         else: self.start_button.configure(state="disabled")
+
     def start_download(self):
+        self.save_config()
         if not self.check_scihub.get() and not self.check_gscholar.get() and not self.check_pmc.get(): self.controller.show_error("Sin fuentes", "Por favor, seleccione al menos una fuente de descarga."); return
         mirrors = [m.strip() for m in self.mirrors_textbox.get("1.0", "end-1c").split(',') if m.strip()] if self.check_scihub.get() else []
         if self.check_scihub.get() and not mirrors: self.controller.show_error("Mirrors de Sci-Hub vacíos", "Por favor, especifique al menos un mirror de Sci-Hub si la fuente está activada."); return
@@ -301,7 +350,7 @@ class App(ctk.CTk):
         progress_frame = self.frames['ProgressFrame']; progress_frame.reset_ui(len(config['df'])); progress_frame.populate_initial_articles(config['df'])
         self.show_frame("ProgressFrame")
         self.start_time = time.time()
-        self.downloader_thread = threading.Thread(target=download_pdfs_from_file, args=(config, self.handle_progress_callback, self.cancel_event))
+        self.downloader_thread = threading.Thread(target=download_pdfs_from_file, args=(config, self.progress_queue, self.cancel_event, self.pause_event))
         self.downloader_thread.start()
         self.after(100, self.process_queue)
         self.update_time_kpis()
@@ -311,7 +360,7 @@ class App(ctk.CTk):
             progress_frame = self.frames['ProgressFrame']
             if message['type'] == 'log': progress_frame.add_log_message(message['message'])
             elif message['type'] == 'current_article': progress_frame.update_current_article(message['data'])
-            elif message['type'] == 'kpi': self.kpi_data = message; progress_frame.update_charts(message)
+            elif message['type'] == 'kpi': self.kpi_data = message; progress_frame.update_charts(self.kpi_data)
             elif message['type'] == 'article_result': progress_frame.update_article_status(message['doi'], message['success'], message.get('source'), message.get('reason'))
             elif message['type'] == 'finished':
                 if self.timer_id: self.after_cancel(self.timer_id)

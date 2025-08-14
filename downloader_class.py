@@ -22,6 +22,9 @@ import threading
 import queue
 import itertools
 import openpyxl
+from openpyxl.drawing.image import Image
+from matplotlib import pyplot as plt
+from collections import Counter
 
 # --- Configuration Constants ---
 DEFAULT_SCI_HUB_MIRRORS = ["https://sci-hub.se/", "https://sci-hub.st/", "https://sci-hub.ru/"]
@@ -42,13 +45,10 @@ class Downloader:
     def _send_log(self, message):
         self.progress_queue.put({'type': 'log', 'message': message})
 
-    def _send_progress(self, current, total, doi, status):
+    def _send_progress(self, article_data):
         self.progress_queue.put({
             'type': 'progress',
-            'current': current,
-            'total': total,
-            'doi': doi,
-            'status': status
+            'article_data': article_data
         })
 
     def _send_article_result(self, doi, success, source=None, reason=None):
@@ -60,12 +60,13 @@ class Downloader:
             'reason': reason,
         })
 
-    def _send_kpi_update(self, obtained, failed, pending):
+    def _send_kpi_update(self, obtained_count, failed_count, pending_count, source_counts):
         self.progress_queue.put({
             'type': 'kpi',
-            'obtained': obtained,
-            'failed': failed,
-            'pending': pending
+            'obtained': obtained_count,
+            'failed': failed_count,
+            'pending': pending_count,
+            'source_counts': source_counts
         })
 
     # --- Core Logic ---
@@ -85,6 +86,7 @@ class Downloader:
 
         successful_articles_data = []
         failed_articles_data = []
+        source_success_counts = Counter()
         was_cancelled = False
 
         try:
@@ -97,12 +99,12 @@ class Downloader:
                         break
 
                     original_row_data = row.to_dict()
-                    doi = str(original_row_data.get('DOI', '')).strip()
-                    title = str(original_row_data.get('Title', '')).strip()
+                    doi = str(original_row_data.get('doi', '')).strip()
+                    title = str(original_row_data.get('title', '')).strip()
                     effective_title = title if title else doi
 
-                    self._send_progress(index + 1, total_articles, doi, "Iniciando...")
-                    self._send_kpi_update(len(successful_articles_data), len(failed_articles_data), total_articles - index)
+                    row_data_with_progress = {**original_row_data, 'current': index + 1, 'total': total_articles}
+                    self._send_progress(row_data_with_progress)
 
                     if not doi:
                         self._send_log(f"DOI vacío en la fila {index+1}, saltando.")
@@ -112,9 +114,10 @@ class Downloader:
                         if self.config.get('excel_report_path'): self._update_report_on_failure(original_row_data, reason)
                         continue
 
-                    pdf_content, download_source, failure_reason = self._try_all_sources(doi, effective_title, index, total_articles)
+                    pdf_content, download_source, failure_reason = self._try_all_sources(doi, effective_title)
 
                     if pdf_content:
+                        source_success_counts[download_source] += 1
                         successful_articles_data.append({'data': original_row_data, 'source': download_source})
                         pdf_filename_in_zip = self._clean_filename(effective_title)[:150] + ".pdf"
 
@@ -135,7 +138,7 @@ class Downloader:
                         if self.config.get('excel_report_path'):
                             self._update_report_on_failure(original_row_data, failure_reason)
 
-                    self._send_kpi_update(len(successful_articles_data), len(failed_articles_data), total_articles - (index + 1))
+                    self._send_kpi_update(len(successful_articles_data), len(failed_articles_data), total_articles - (index + 1), source_success_counts)
 
                     time.sleep(self.config['inter_doi_delay'])
 
@@ -154,24 +157,29 @@ class Downloader:
                 'failed_articles': failed_articles_data,
                 'was_cancelled': was_cancelled,
                 'zip_path': self.config['zip_path'],
-                'excel_report_path': self.config.get('excel_report_path')
+                'excel_report_path': self.config.get('excel_report_path'),
+                'source_counts': source_success_counts
             }
+            if results['excel_report_path']:
+                self._export_charts_to_excel(results)
+
             self.progress_queue.put({'type': 'finished', 'results': results})
 
-    def _try_all_sources(self, doi, effective_title, index, total_articles):
+    def _try_all_sources(self, doi, effective_title):
         # 1. Sci-Hub
-        self._send_progress(index + 1, total_articles, doi, "Buscando en Sci-Hub...")
-        for mirror in self.config['sci_hub_mirrors']:
-            self._check_pause_cancel()
-            if self.cancel_event.is_set(): return None, None, "Cancelado"
+        if self.config['sci_hub_mirrors']:
+            self._send_log("Buscando en Sci-Hub...")
+            for mirror in self.config['sci_hub_mirrors']:
+                self._check_pause_cancel()
+                if self.cancel_event.is_set(): return None, None, "Cancelado"
 
-            self._send_log(f"Intentando con mirror de Sci-Hub: {mirror}")
-            pdf_content, reason = self._download_from_scihub_mirror(mirror, doi)
-            if pdf_content:
-                self._send_log(f"Éxito con Sci-Hub mirror: {mirror}")
-                return pdf_content, "Sci-Hub", None
-            else:
-                self._send_log(f"Fallo con Sci-Hub mirror {mirror}: {reason}")
+                self._send_log(f"Intentando con mirror de Sci-Hub: {mirror}")
+                pdf_content, reason = self._download_from_scihub_mirror(mirror, doi)
+                if pdf_content:
+                    self._send_log(f"Éxito con Sci-Hub mirror: {mirror}")
+                    return pdf_content, "Sci-Hub", None
+                else:
+                    self._send_log(f"Fallo con Sci-Hub mirror {mirror}: {reason}")
 
         # 2. Google Scholar
         if self.config['use_google_scholar'] and self.driver:
@@ -400,6 +408,58 @@ class Downloader:
             workbook.save(excel_path)
         except Exception as e:
             self._send_log(f"Error al actualizar reporte Excel para DOI {doi_to_move}: {e}")
+
+    def _export_charts_to_excel(self, results):
+        excel_path = results.get('excel_report_path')
+        if not excel_path or not os.path.exists(excel_path):
+            self._send_log("No se generarán gráficos en Excel (ruta no especificada).")
+            return
+
+        self._send_log("Generando y exportando gráficos a Excel...")
+        chart_paths = []
+        try:
+            # Chart 1: Overall Progress
+            pending_count = results['total_articles'] - results['successful_count'] - results['failed_count']
+            labels1 = 'Obtenidos', 'Fallidos', 'Pendientes'
+            sizes1 = [results['successful_count'], results['failed_count'], pending_count]
+            if sum(sizes1) > 0:
+                fig1, ax1 = plt.subplots(); ax1.pie(sizes1, labels=labels1, autopct='%1.1f%%', startangle=90, colors=['#34A853', '#EA4335', 'grey']); ax1.axis('equal'); ax1.set_title('Progreso General')
+                chart1_path = "chart_progreso.png"; fig1.savefig(chart1_path); plt.close(fig1); chart_paths.append(chart1_path)
+
+            # Chart 2: Success Rate of Processed
+            if (results['successful_count'] + results['failed_count']) > 0:
+                labels2 = 'Obtenidos', 'Fallidos'
+                sizes2 = [results['successful_count'], results['failed_count']]
+                fig2, ax2 = plt.subplots(); ax2.pie(sizes2, labels=labels2, autopct='%1.1f%%', startangle=90, colors=['#34A853', '#EA4335']); ax2.axis('equal'); ax2.set_title('Tasa de Éxito (de Procesados)')
+                chart2_path = "chart_tasa_exito.png"; fig2.savefig(chart2_path); plt.close(fig2); chart_paths.append(chart2_path)
+
+            # Chart 3: Source Breakdown
+            source_counts = results.get('source_counts', Counter())
+            if results['failed_count'] > 0: source_counts['Fallidos'] = results['failed_count']
+            if source_counts:
+                labels3 = list(source_counts.keys()); sizes3 = list(source_counts.values())
+                fig3, ax3 = plt.subplots(); ax3.pie(sizes3, labels=labels3, autopct='%1.1f%%', startangle=90, wedgeprops=dict(width=0.4)); ax3.set_title('Desglose de Resultados')
+                chart3_path = "chart_desglose.png"; fig3.savefig(chart3_path); plt.close(fig3); chart_paths.append(chart3_path)
+
+            if not chart_paths:
+                self._send_log("No hay datos suficientes para generar gráficos."); return
+
+            # Add to Excel
+            workbook = openpyxl.load_workbook(excel_path)
+            if "Gráficos" not in workbook.sheetnames: charts_sheet = workbook.create_sheet("Gráficos", 0)
+            else: charts_sheet = workbook["Gráficos"]
+
+            img1 = Image(chart_paths[0]); charts_sheet.add_image(img1, 'A1')
+            if len(chart_paths) > 1: img2 = Image(chart_paths[1]); charts_sheet.add_image(img2, 'J1')
+            if len(chart_paths) > 2: img3 = Image(chart_paths[2]); charts_sheet.add_image(img3, 'A30')
+            workbook.save(excel_path)
+
+            self._send_log("Gráficos exportados a Excel correctamente.")
+        except Exception as e:
+            self._send_log(f"Error al exportar gráficos a Excel: {e}")
+        finally:
+            for path in chart_paths:
+                if os.path.exists(path): os.remove(path)
 
     def _update_report_on_failure(self, failed_row_data, reason):
         excel_path = self.config.get('excel_report_path')

@@ -180,7 +180,7 @@ class Downloader:
         if self.config['use_google_scholar'] and self.driver:
             self._check_pause_cancel()
             if self.cancel_event.is_set(): return None, None, "Cancelado"
-            self._send_progress(index + 1, total_articles, doi, "Buscando en Google Scholar...")
+            self._send_log("Buscando en Google Scholar...")
             pdf_content, reason = self._download_with_selenium_google_scholar(doi, effective_title)
             if pdf_content:
                 self._send_log(f"Éxito con Google Scholar: {reason}")
@@ -192,7 +192,7 @@ class Downloader:
         if self.config['use_pmc'] and self.driver:
             self._check_pause_cancel()
             if self.cancel_event.is_set(): return None, None, "Cancelado"
-            self._send_progress(index + 1, total_articles, doi, "Buscando en PubMed Central...")
+            self._send_log("Buscando en PubMed Central...")
             pdf_content, reason = self._download_with_selenium_pmc(doi, effective_title)
             if pdf_content:
                 self._send_log(f"Éxito con PubMed Central: {reason}")

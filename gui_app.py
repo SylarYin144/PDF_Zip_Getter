@@ -7,7 +7,7 @@ import queue
 import platform
 import subprocess
 import time
-from downloader_class import Downloader, DEFAULT_SCI_HUB_MIRRORS
+from scihub_downloader import download_pdfs_from_file, DEFAULT_SCI_HUB_MIRRORS_EXAMPLE
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib import pyplot as plt
@@ -38,7 +38,7 @@ class ConfigFrame(ctk.CTkFrame):
         adv_frame.grid_columnconfigure(0, weight=1); adv_frame.grid_rowconfigure(2, weight=1)
         ctk.CTkLabel(adv_frame, text="3. Configuración Avanzada", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=(10, 5), sticky="w")
         ctk.CTkLabel(adv_frame, text="Mirrors de Sci-Hub (separados por coma):").grid(row=1, column=0, columnspan=2, padx=10, pady=(5,0), sticky="w")
-        self.mirrors_textbox = ctk.CTkTextbox(adv_frame); self.mirrors_textbox.grid(row=2, column=0, columnspan=2, padx=10, pady=5, sticky="nsew"); self.mirrors_textbox.insert("1.0", ",\n".join(DEFAULT_SCI_HUB_MIRRORS))
+        self.mirrors_textbox = ctk.CTkTextbox(adv_frame); self.mirrors_textbox.grid(row=2, column=0, columnspan=2, padx=10, pady=5, sticky="nsew"); self.mirrors_textbox.insert("1.0", ",\n".join(DEFAULT_SCI_HUB_MIRRORS_EXAMPLE))
         ctk.CTkLabel(adv_frame, text="Tiempo de espera entre DOIs (s):").grid(row=3, column=0, padx=10, pady=(10, 0), sticky="w")
         self.delay_entry = ctk.CTkEntry(adv_frame, width=80); self.delay_entry.grid(row=3, column=1, padx=10, pady=(10,0), sticky="e"); self.delay_entry.insert(0, "2")
         ctk.CTkLabel(adv_frame, text="Timeout Carga de Página (s):").grid(row=4, column=0, padx=10, pady=(10, 0), sticky="w")
@@ -78,7 +78,7 @@ class ConfigFrame(ctk.CTkFrame):
         if self.check_scihub.get() and not mirrors: self.controller.show_error("Mirrors de Sci-Hub vacíos", "Por favor, especifique al menos un mirror de Sci-Hub si la fuente está activada."); return
         try: delay = int(self.delay_entry.get()); page_load_timeout = int(self.page_load_timeout_entry.get()); element_wait_timeout = int(self.element_wait_timeout_entry.get())
         except ValueError: self.controller.show_error("Valor inválido", "Los tiempos de espera deben ser números enteros."); return
-        config = {'input_df': self.controller.input_df, 'zip_path': self.zip_file_path, 'excel_report_path': self.excel_report_path, 'sci_hub_mirrors': mirrors, 'use_google_scholar': bool(self.check_gscholar.get()), 'use_pmc': bool(self.check_pmc.get()), 'inter_doi_delay': delay, 'page_load_timeout': page_load_timeout, 'element_wait_timeout': element_wait_timeout}
+        config = {'df': self.controller.input_df, 'zip_path': self.zip_file_path, 'excel_report_path': self.excel_report_path, 'sci_hub_mirrors': mirrors, 'use_google_scholar': bool(self.check_gscholar.get()), 'use_pmc': bool(self.check_pmc.get()), 'inter_doi_delay': delay, 'page_load_timeout': page_load_timeout, 'element_wait_timeout': element_wait_timeout}
         self.controller.start_download_process(config)
 
 class ProgressFrame(ctk.CTkFrame):
@@ -168,7 +168,7 @@ class ProgressFrame(ctk.CTkFrame):
         if canvas: canvas.get_tk_widget().destroy()
         for widget in frame.winfo_children(): widget.destroy()
         if not chart_data['sizes'] or sum(chart_data['sizes']) == 0: ctk.CTkLabel(frame, text=f"{chart_data['title']}\n(Esperando datos)").pack(expand=True); return
-        is_dark = ctk.get_appearance_mode() == "Dark"; bg_color = frame.cget("fg_color")[0] if is_dark else frame.cget("fg_color")[1]; text_color = "#FFFFFF" if is_dark else "#000000"
+        is_dark = ctk.get_appearance_mode() == "Dark"; bg_color = "#242424" if is_dark else "#dbdbdb"; text_color = "#FFFFFF" if is_dark else "#000000"
         fig = Figure(figsize=(4, 2.5), dpi=80, facecolor=bg_color)
         ax = fig.add_subplot(111)
         wedges, texts, autotexts = ax.pie(chart_data['sizes'], autopct='%1.1f%%', startangle=90, colors=chart_data.get('colors'), wedgeprops=chart_data.get('wedgeprops', {}), textprops={'color': text_color, 'fontsize': 8})
@@ -232,7 +232,7 @@ class ResultsFrame(ctk.CTkFrame):
         if canvas: canvas.get_tk_widget().destroy()
         for widget in frame.winfo_children(): widget.destroy()
         if not chart_data['sizes'] or sum(chart_data['sizes']) == 0: ctk.CTkLabel(frame, text=f"{chart_data['title']}\n(No hay datos)").pack(expand=True); return
-        is_dark = ctk.get_appearance_mode() == "Dark"; bg_color = frame.cget("fg_color")[0] if is_dark else frame.cget("fg_color")[1]; text_color = "#FFFFFF" if is_dark else "#000000"
+        is_dark = ctk.get_appearance_mode() == "Dark"; bg_color = "#242424" if is_dark else "#dbdbdb"; text_color = "#FFFFFF" if is_dark else "#000000"
         fig = Figure(figsize=(4, 2.5), dpi=100, facecolor=bg_color)
         ax = fig.add_subplot(111)
         wedges, texts, autotexts = ax.pie(chart_data['sizes'], autopct='%1.1f%%', startangle=90, colors=chart_data.get('colors'), wedgeprops=chart_data.get('wedgeprops', {}), textprops={'color': text_color, 'fontsize': 8})
@@ -297,33 +297,37 @@ class App(ctk.CTk):
 
     def show_frame(self, frame_name): self.frames[frame_name].tkraise()
     def start_download_process(self, config):
-        self.cancel_event.clear(); self.pause_event.clear(); self.kpi_data = {'obtained': 0, 'failed': 0, 'pending': len(config['input_df']), 'source_counts': Counter()}
-        progress_frame = self.frames['ProgressFrame']; progress_frame.reset_ui(len(config['input_df'])); progress_frame.populate_initial_articles(config['input_df'])
+        self.cancel_event.clear(); self.pause_event.clear(); self.kpi_data = {'obtained': 0, 'failed': 0, 'pending': len(config['df']), 'source_counts': Counter()}
+        progress_frame = self.frames['ProgressFrame']; progress_frame.reset_ui(len(config['df'])); progress_frame.populate_initial_articles(config['df'])
         self.show_frame("ProgressFrame")
         self.start_time = time.time()
-        downloader = Downloader(config, self.progress_queue, self.cancel_event, self.pause_event)
-        self.downloader_thread = threading.Thread(target=downloader.run); self.downloader_thread.start()
+        self.downloader_thread = threading.Thread(target=download_pdfs_from_file, args=(config, self.handle_progress_callback, self.cancel_event))
+        self.downloader_thread.start()
         self.after(100, self.process_queue)
         self.update_time_kpis()
-
     def process_queue(self):
         try:
             message = self.progress_queue.get_nowait()
             progress_frame = self.frames['ProgressFrame']
             if message['type'] == 'log': progress_frame.add_log_message(message['message'])
-            elif message['type'] == 'progress': progress_frame.update_current_article(message['article_data'])
+            elif message['type'] == 'current_article': progress_frame.update_current_article(message['data'])
             elif message['type'] == 'kpi': self.kpi_data = message; progress_frame.update_charts(message)
             elif message['type'] == 'article_result': progress_frame.update_article_status(message['doi'], message['success'], message.get('source'), message.get('reason'))
             elif message['type'] == 'finished':
                 if self.timer_id: self.after_cancel(self.timer_id)
                 progress_frame.finalize_ui()
-                self.frames['ResultsFrame'].update_results(message['results'])
+                self.frames['ResultsFrame'].update_results(message['summary'])
                 self.show_frame("ResultsFrame")
                 return
         except queue.Empty: pass
         finally:
             if self.downloader_thread and self.downloader_thread.is_alive(): self.after(100, self.process_queue)
-            elif not self.progress_queue.empty(): self.after(10, self.process_queue)
+            else:
+                while not self.progress_queue.empty():
+                    try:
+                        message = self.progress_queue.get_nowait()
+                        if message['type'] == 'finished': self.frames['ResultsFrame'].update_results(message['summary']); self.show_frame("ResultsFrame")
+                    except queue.Empty: break
     def update_time_kpis(self):
         if not self.downloader_thread or not self.downloader_thread.is_alive():
             if self.timer_id: self.after_cancel(self.timer_id); self.timer_id = None
@@ -337,8 +341,7 @@ class App(ctk.CTk):
         if self.pause_event.is_set(): self.pause_event.clear(); self.frames['ProgressFrame'].pause_button.configure(text="Pausar")
         else: self.pause_event.set(); self.frames['ProgressFrame'].pause_button.configure(text="Reanudar")
     def cancel_download(self): self.cancel_event.set(); self.frames['ProgressFrame'].finalize_ui()
-    def add_log_message(self, msg):
-        self.frames['ProgressFrame'].add_log_message(msg)
+    def add_log_message(self, msg): self.frames['ProgressFrame'].add_log_message(msg)
     def show_error(self, title, message): messagebox.showerror(title, message)
     def show_info(self, title, message): messagebox.showinfo(title, message)
 

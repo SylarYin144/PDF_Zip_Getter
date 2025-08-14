@@ -22,8 +22,6 @@ import threading
 import queue
 import itertools
 import openpyxl
-from openpyxl.drawing.image import Image
-from matplotlib import pyplot as plt
 from collections import Counter
 
 # --- Configuration Constants ---
@@ -160,9 +158,6 @@ class Downloader:
                 'excel_report_path': self.config.get('excel_report_path'),
                 'source_counts': source_success_counts
             }
-            if results['excel_report_path']:
-                self._export_charts_to_excel(results)
-
             self.progress_queue.put({'type': 'finished', 'results': results})
 
     def _try_all_sources(self, doi, effective_title):
@@ -408,58 +403,6 @@ class Downloader:
             workbook.save(excel_path)
         except Exception as e:
             self._send_log(f"Error al actualizar reporte Excel para DOI {doi_to_move}: {e}")
-
-    def _export_charts_to_excel(self, results):
-        excel_path = results.get('excel_report_path')
-        if not excel_path or not os.path.exists(excel_path):
-            self._send_log("No se generarán gráficos en Excel (ruta no especificada).")
-            return
-
-        self._send_log("Generando y exportando gráficos a Excel...")
-        chart_paths = []
-        try:
-            # Chart 1: Overall Progress
-            pending_count = results['total_articles'] - results['successful_count'] - results['failed_count']
-            labels1 = 'Obtenidos', 'Fallidos', 'Pendientes'
-            sizes1 = [results['successful_count'], results['failed_count'], pending_count]
-            if sum(sizes1) > 0:
-                fig1, ax1 = plt.subplots(); ax1.pie(sizes1, labels=labels1, autopct='%1.1f%%', startangle=90, colors=['#34A853', '#EA4335', 'grey']); ax1.axis('equal'); ax1.set_title('Progreso General')
-                chart1_path = "chart_progreso.png"; fig1.savefig(chart1_path); plt.close(fig1); chart_paths.append(chart1_path)
-
-            # Chart 2: Success Rate of Processed
-            if (results['successful_count'] + results['failed_count']) > 0:
-                labels2 = 'Obtenidos', 'Fallidos'
-                sizes2 = [results['successful_count'], results['failed_count']]
-                fig2, ax2 = plt.subplots(); ax2.pie(sizes2, labels=labels2, autopct='%1.1f%%', startangle=90, colors=['#34A853', '#EA4335']); ax2.axis('equal'); ax2.set_title('Tasa de Éxito (de Procesados)')
-                chart2_path = "chart_tasa_exito.png"; fig2.savefig(chart2_path); plt.close(fig2); chart_paths.append(chart2_path)
-
-            # Chart 3: Source Breakdown
-            source_counts = results.get('source_counts', Counter())
-            if results['failed_count'] > 0: source_counts['Fallidos'] = results['failed_count']
-            if source_counts:
-                labels3 = list(source_counts.keys()); sizes3 = list(source_counts.values())
-                fig3, ax3 = plt.subplots(); ax3.pie(sizes3, labels=labels3, autopct='%1.1f%%', startangle=90, wedgeprops=dict(width=0.4)); ax3.set_title('Desglose de Resultados')
-                chart3_path = "chart_desglose.png"; fig3.savefig(chart3_path); plt.close(fig3); chart_paths.append(chart3_path)
-
-            if not chart_paths:
-                self._send_log("No hay datos suficientes para generar gráficos."); return
-
-            # Add to Excel
-            workbook = openpyxl.load_workbook(excel_path)
-            if "Gráficos" not in workbook.sheetnames: charts_sheet = workbook.create_sheet("Gráficos", 0)
-            else: charts_sheet = workbook["Gráficos"]
-
-            img1 = Image(chart_paths[0]); charts_sheet.add_image(img1, 'A1')
-            if len(chart_paths) > 1: img2 = Image(chart_paths[1]); charts_sheet.add_image(img2, 'J1')
-            if len(chart_paths) > 2: img3 = Image(chart_paths[2]); charts_sheet.add_image(img3, 'A30')
-            workbook.save(excel_path)
-
-            self._send_log("Gráficos exportados a Excel correctamente.")
-        except Exception as e:
-            self._send_log(f"Error al exportar gráficos a Excel: {e}")
-        finally:
-            for path in chart_paths:
-                if os.path.exists(path): os.remove(path)
 
     def _update_report_on_failure(self, failed_row_data, reason):
         excel_path = self.config.get('excel_report_path')

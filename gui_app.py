@@ -10,7 +10,10 @@ import time
 from downloader_class import Downloader, DEFAULT_SCI_HUB_MIRRORS
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib import pyplot as plt
 from collections import Counter
+import openpyxl
+from openpyxl.drawing.image import Image
 
 class ConfigFrame(ctk.CTkFrame):
     def __init__(self, parent, controller):
@@ -82,8 +85,7 @@ class ProgressFrame(ctk.CTkFrame):
     def __init__(self, parent, controller):
         super().__init__(parent)
         self.controller = controller
-        self.grid_columnconfigure(0, weight=1); self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(1, weight=1); self.grid_rowconfigure(1, weight=1)
         top_frame = ctk.CTkFrame(self, fg_color="transparent"); top_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
         top_frame.grid_columnconfigure(0, weight=1); top_frame.grid_columnconfigure(1, weight=1)
         self.current_article_frame = ctk.CTkFrame(top_frame); self.current_article_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
@@ -123,8 +125,7 @@ class ProgressFrame(ctk.CTkFrame):
         self.pause_button = ctk.CTkButton(controls_frame, text="Pausar", command=self.controller.toggle_pause); self.pause_button.grid(row=0, column=0, padx=5)
         self.cancel_button = ctk.CTkButton(controls_frame, text="Cancelar", fg_color="red", hover_color="darkred", command=self.controller.cancel_download); self.cancel_button.grid(row=0, column=1, padx=5)
     def reset_ui(self, total_articles):
-        self.current_article_num_label.configure(text=f"Artículo: 0/{total_articles} (0.0%)")
-        self.current_title_label.configure(text="Título: Esperando para iniciar..."); self.current_author_label.configure(text="Autor: --"); self.current_journal_label.configure(text="Revista: --"); self.current_year_label.configure(text="Año: --"); self.current_doi_label.configure(text="DOI: --")
+        self.current_article_num_label.configure(text=f"Artículo: 0/{total_articles} (0.0%)"); self.current_title_label.configure(text="Título: Esperando para iniciar..."); self.current_author_label.configure(text="Autor: --"); self.current_journal_label.configure(text="Revista: --"); self.current_year_label.configure(text="Año: --"); self.current_doi_label.configure(text="DOI: --")
         self.time_elapsed_label.configure(text="Transcurrido: 00:00:00"); self.time_avg_label.configure(text="Promedio/DOI: -- s"); self.time_etr_label.configure(text="Tiempo Restante: --:--:--")
         self.log_textbox.configure(state="normal"); self.log_textbox.delete("1.0", "end"); self.log_textbox.configure(state="disabled")
         for widget in self.article_list_frame.winfo_children(): widget.destroy()
@@ -166,9 +167,8 @@ class ProgressFrame(ctk.CTkFrame):
     def _create_chart(self, frame, canvas, chart_data):
         if canvas: canvas.get_tk_widget().destroy()
         for widget in frame.winfo_children(): widget.destroy()
-        if not chart_data['sizes'] or sum(chart_data['sizes']) == 0:
-            ctk.CTkLabel(frame, text=f"{chart_data['title']}\n(Esperando datos)").pack(expand=True); return
-        is_dark = ctk.get_appearance_mode() == "Dark"; bg_color = frame.cget("fg_color")[1]; text_color = "#FFFFFF" if is_dark else "#000000"
+        if not chart_data['sizes'] or sum(chart_data['sizes']) == 0: ctk.CTkLabel(frame, text=f"{chart_data['title']}\n(Esperando datos)").pack(expand=True); return
+        is_dark = ctk.get_appearance_mode() == "Dark"; bg_color = frame.cget("fg_color")[0] if is_dark else frame.cget("fg_color")[1]; text_color = "#FFFFFF" if is_dark else "#000000"
         fig = Figure(figsize=(4, 2.5), dpi=80, facecolor=bg_color)
         ax = fig.add_subplot(111)
         wedges, texts, autotexts = ax.pie(chart_data['sizes'], autopct='%1.1f%%', startangle=90, colors=chart_data.get('colors'), wedgeprops=chart_data.get('wedgeprops', {}), textprops={'color': text_color, 'fontsize': 8})
@@ -217,6 +217,7 @@ class ResultsFrame(ctk.CTkFrame):
         self.copy_failed_button.pack_forget() if not results['failed_articles'] else self.copy_failed_button.pack(pady=10)
         self.open_report_button.configure(state="normal" if results['excel_report_path'] else "disabled")
         self.update_final_charts(results)
+        if self.results_data.get('excel_report_path'): self.export_charts_to_excel(results)
     def update_final_charts(self, results):
         pending_count = results['total_articles'] - results['successful_count'] - results['failed_count']
         chart1_data = {'title': 'Progreso General', 'labels': ['Obtenidos', 'Fallidos', 'Pendientes'], 'sizes': [results['successful_count'], results['failed_count'], pending_count], 'colors': ['#34A853', '#EA4335', 'grey']}
@@ -231,7 +232,7 @@ class ResultsFrame(ctk.CTkFrame):
         if canvas: canvas.get_tk_widget().destroy()
         for widget in frame.winfo_children(): widget.destroy()
         if not chart_data['sizes'] or sum(chart_data['sizes']) == 0: ctk.CTkLabel(frame, text=f"{chart_data['title']}\n(No hay datos)").pack(expand=True); return
-        is_dark = ctk.get_appearance_mode() == "Dark"; bg_color = frame.cget("fg_color")[1]; text_color = "#FFFFFF" if is_dark else "#000000"
+        is_dark = ctk.get_appearance_mode() == "Dark"; bg_color = frame.cget("fg_color")[0] if is_dark else frame.cget("fg_color")[1]; text_color = "#FFFFFF" if is_dark else "#000000"
         fig = Figure(figsize=(4, 2.5), dpi=100, facecolor=bg_color)
         ax = fig.add_subplot(111)
         wedges, texts, autotexts = ax.pie(chart_data['sizes'], autopct='%1.1f%%', startangle=90, colors=chart_data.get('colors'), wedgeprops=chart_data.get('wedgeprops', {}), textprops={'color': text_color, 'fontsize': 8})
@@ -239,6 +240,36 @@ class ResultsFrame(ctk.CTkFrame):
         ax.set_title(chart_data['title'], color=text_color, fontsize=10); fig.tight_layout(pad=1.5)
         new_canvas = FigureCanvasTkAgg(fig, master=frame); new_canvas.draw(); new_canvas.get_tk_widget().pack(side=ctk.TOP, fill=ctk.BOTH, expand=True)
         return new_canvas
+    def export_charts_to_excel(self, results):
+        excel_path = results.get('excel_report_path')
+        self.controller.add_log_message("Exportando gráficos a Excel...")
+        chart_paths = []
+        try:
+            fig1 = self._create_figure_for_export({'title': 'Progreso General', 'labels': ['Obtenidos', 'Fallidos', 'Pendientes'], 'sizes': [results['successful_count'], results['failed_count'], results['total_articles'] - results['successful_count'] - results['failed_count']], 'colors': ['#34A853', '#EA4335', 'grey']})
+            if fig1: chart1_path = "chart_progreso.png"; fig1.savefig(chart1_path); plt.close(fig1); chart_paths.append(chart1_path)
+            fig2 = self._create_figure_for_export({'title': 'Tasa de Éxito (de Procesados)', 'labels': ['Obtenidos', 'Fallidos'], 'sizes': [results['successful_count'], results['failed_count']], 'colors': ['#34A853', '#EA4335']})
+            if fig2: chart2_path = "chart_tasa_exito.png"; fig2.savefig(chart2_path); plt.close(fig2); chart_paths.append(chart2_path)
+            source_counts = results.get('source_counts', Counter());
+            if results['failed_count'] > 0: source_counts['Fallidos'] = results['failed_count']
+            fig3 = self._create_figure_for_export({'title': 'Desglose de Resultados', 'labels': list(source_counts.keys()), 'sizes': list(source_counts.values()), 'wedgeprops': dict(width=0.4)})
+            if fig3: chart3_path = "chart_desglose.png"; fig3.savefig(chart3_path); plt.close(fig3); chart_paths.append(chart3_path)
+            if not chart_paths: self.controller.add_log_message("No hay datos suficientes para generar gráficos."); return
+            workbook = openpyxl.load_workbook(excel_path)
+            if "Gráficos" not in workbook.sheetnames: charts_sheet = workbook.create_sheet("Gráficos", 0)
+            else: charts_sheet = workbook["Gráficos"]
+            for i, path in enumerate(chart_paths):
+                img = Image(path); charts_sheet.add_image(img, f"{chr(ord('A') + i*9)}1")
+            workbook.save(excel_path)
+            self.controller.add_log_message("Gráficos exportados a Excel correctamente.")
+        except Exception as e: self.controller.add_log_message(f"Error al exportar gráficos a Excel: {e}")
+        finally:
+            for path in chart_paths:
+                if os.path.exists(path): os.remove(path)
+    def _create_figure_for_export(self, chart_data):
+        if not chart_data['sizes'] or sum(chart_data['sizes']) == 0: return None
+        fig, ax = plt.subplots(figsize=(6, 4), dpi=100)
+        ax.pie(chart_data['sizes'], labels=chart_data['labels'], autopct='%1.1f%%', startangle=90, colors=chart_data.get('colors'), wedgeprops=chart_data.get('wedgeprops', {}))
+        ax.set_title(chart_data['title']); ax.axis('equal'); return fig
     def copy_failed_dois(self):
         failed_dois = [item['data']['doi'] for item in self.results_data.get('failed_articles', []) if item['data']['doi']]
         if failed_dois: self.clipboard_clear(); self.clipboard_append("\n".join(failed_dois)); self.controller.show_info("Copiado", f"{len(failed_dois)} DOIs fallidos copiados al portapapeles.")
@@ -266,7 +297,7 @@ class App(ctk.CTk):
 
     def show_frame(self, frame_name): self.frames[frame_name].tkraise()
     def start_download_process(self, config):
-        self.cancel_event.clear(); self.pause_event.clear(); self.kpi_data = {}
+        self.cancel_event.clear(); self.pause_event.clear(); self.kpi_data = {'obtained': 0, 'failed': 0, 'pending': len(config['input_df']), 'source_counts': Counter()}
         progress_frame = self.frames['ProgressFrame']; progress_frame.reset_ui(len(config['input_df'])); progress_frame.populate_initial_articles(config['input_df'])
         self.show_frame("ProgressFrame")
         self.start_time = time.time()
@@ -293,22 +324,21 @@ class App(ctk.CTk):
         finally:
             if self.downloader_thread and self.downloader_thread.is_alive(): self.after(100, self.process_queue)
             elif not self.progress_queue.empty(): self.after(10, self.process_queue)
-
     def update_time_kpis(self):
         if not self.downloader_thread or not self.downloader_thread.is_alive():
-            if self.timer_id: self.after_cancel(self.timer_id)
+            if self.timer_id: self.after_cancel(self.timer_id); self.timer_id = None
             return
         elapsed = time.time() - self.start_time
         processed_count = self.kpi_data.get('obtained', 0) + self.kpi_data.get('failed', 0)
         pending_count = self.kpi_data.get('pending', 0)
         self.frames['ProgressFrame'].update_timers(elapsed, processed_count, pending_count)
         self.timer_id = self.after(1000, self.update_time_kpis)
-
     def toggle_pause(self):
         if self.pause_event.is_set(): self.pause_event.clear(); self.frames['ProgressFrame'].pause_button.configure(text="Pausar")
         else: self.pause_event.set(); self.frames['ProgressFrame'].pause_button.configure(text="Reanudar")
-
     def cancel_download(self): self.cancel_event.set(); self.frames['ProgressFrame'].finalize_ui()
+    def add_log_message(self, msg):
+        self.frames['ProgressFrame'].add_log_message(msg)
     def show_error(self, title, message): messagebox.showerror(title, message)
     def show_info(self, title, message): messagebox.showinfo(title, message)
 

@@ -1,2 +1,6 @@
 selenium
 webdriver-manager
+pandas
+requests
+beautifulsoup4
+openpyxl

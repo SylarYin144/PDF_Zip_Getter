@@ -139,8 +139,15 @@ class SciHubDownloaderApp:
         if path: self.input_file_path.set(path);
         try: self.df_articles = pd.read_excel(path) if path.lower().endswith(('.xlsx', '.xls')) else pd.read_csv(path); self.article_count_str.set(f"Detectados: {len(self.df_articles)} artículos")
         except Exception as e: messagebox.showerror("Error de Lectura", f"No se pudo leer el archivo:\n{e}"); self.df_articles = None
-    def _select_zip_output(self): path = filedialog.asksaveasfilename(defaultextension=".zip", filetypes=(("Archivos ZIP", "*.zip"),));
-    def _select_report_output(self): path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=(("Archivos Excel", "*.xlsx"),), initialfile="SciHub_Reporte.xlsx");
+    def _select_zip_output(self):
+        path = filedialog.asksaveasfilename(defaultextension=".zip", filetypes=(("Archivos ZIP", "*.zip"),))
+        if path:
+            self.zip_output_path.set(path)
+
+    def _select_report_output(self):
+        path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=(("Archivos Excel", "*.xlsx"),), initialfile="SciHub_Reporte.xlsx")
+        if path:
+            self.report_output_path.set(path)
     def _start_download_process(self):
         config = {"input_file": self.input_file_path.get(), "zip_output": self.zip_output_path.get(), "report_output": self.report_output_path.get(), "use_scihub": self.use_scihub.get(), "use_google_scholar": self.use_google_scholar.get(), "use_pmc": self.use_pmc.get(), "mirrors": [m.strip() for m in self.mirrors_text.get("1.0", tk.END).strip().split("\n") if m.strip()], "inter_doi_delay": self.inter_doi_delay.get(), "mirror_switch_delay": self.mirror_switch_delay.get(), "page_load_timeout": self.page_load_timeout.get(), "element_find_timeout": self.element_find_timeout.get()}
         if not config["input_file"] or not config["zip_output"]: messagebox.showwarning("Faltan Datos", "Especifique el archivo de entrada y la ubicación del ZIP."); return

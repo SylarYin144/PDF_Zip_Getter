@@ -76,9 +76,18 @@ class ConfigFrame(ctk.CTkFrame):
         self.zip_path_label.configure(text=f"Se guardará en: {self.zip_file_path}" if self.zip_file_path else "No se ha seleccionado la ubicación.")
         self.excel_report_path = config.get("excel_report_path", "")
         self.report_path_label.configure(text=f"Reporte se guardará en: {self.excel_report_path}" if self.excel_report_path else "No se generará reporte.")
-        self.check_scihub.set(config.get("use_scihub", 1))
-        self.check_gscholar.set(config.get("use_gscholar", 1))
-        self.check_pmc.set(config.get("use_pmc", 1))
+        if config.get("use_scihub", 1):
+            self.check_scihub.select()
+        else:
+            self.check_scihub.deselect()
+        if config.get("use_gscholar", 1):
+            self.check_gscholar.select()
+        else:
+            self.check_gscholar.deselect()
+        if config.get("use_pmc", 1):
+            self.check_pmc.select()
+        else:
+            self.check_pmc.deselect()
         self.mirrors_textbox.delete("1.0", "end")
         self.mirrors_textbox.insert("1.0", config.get("mirrors", ",\n".join(DEFAULT_SCI_HUB_MIRRORS_EXAMPLE)))
         self.delay_entry.delete(0, "end"); self.delay_entry.insert(0, str(config.get("delay", "2")))

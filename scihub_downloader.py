@@ -136,13 +136,6 @@ def download_pdfs_from_file(config, progress_queue=None, cancel_event=None, paus
         except Exception as e: log(f"Error al inicializar WebDriver: {e}"); driver = None
     session = requests.Session(); session.headers.update({'User-Agent': STANDARD_USER_AGENT})
     successful_articles = []; failed_articles = []; source_counts = Counter()
-    if excel_report_path:
-        try:
-            with pd.ExcelWriter(excel_report_path, engine='openpyxl') as writer:
-                df_copy = df.copy(); df_copy['Failure_Reason'] = 'En cola'
-                df_copy.to_excel(writer, sheet_name='Fallidos', index=False)
-                pd.DataFrame(columns=list(df.columns) + ['Successful_Mirror']).to_excel(writer, sheet_name='Obtenidos', index=False)
-        except Exception as e: log(f"No se pudo crear el reporte Excel inicial: {e}"); excel_report_path = None
     try:
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             total_articles = len(df)
@@ -182,6 +175,28 @@ def download_pdfs_from_file(config, progress_queue=None, cancel_event=None, paus
     except Exception as e: log(f"Error crítico: {e}")
     finally:
         if driver: driver.quit()
+        if excel_report_path and not (cancel_event and cancel_event.is_set()):
+            log("Generando reporte final en Excel...")
+            try:
+                original_cols = list(df.columns)
+                obtained_df = pd.DataFrame([s['data'] for s in successful_articles])
+                if not obtained_df.empty: obtained_df['Fuente_Exito'] = [s['source'] for s in successful_articles]
+                failed_articles_data = [f['data'] for f in failed_articles]
+                failed_df = pd.DataFrame(failed_articles_data)
+                if not failed_df.empty:
+                    for col in original_cols:
+                        if col not in failed_df: failed_df[col] = ''
+                    reprocess_df = failed_df[original_cols]
+                    log_df = failed_df.copy(); log_df['Razon_Fallo'] = [f['reason'] for f in failed_articles]
+                else:
+                    reprocess_df = pd.DataFrame(columns=original_cols)
+                    log_df = pd.DataFrame(columns=original_cols + ['Razon_Fallo'])
+                with pd.ExcelWriter(excel_report_path, engine='openpyxl') as writer:
+                    obtained_df.to_excel(writer, sheet_name='Obtenidos', index=False)
+                    reprocess_df.to_excel(writer, sheet_name='Fallidos (para re-procesar)', index=False)
+                    log_df.to_excel(writer, sheet_name='Log de Fallos', index=False)
+                log(f"Reporte final guardado en: {excel_report_path}")
+            except Exception as e: log(f"Error al guardar el reporte Excel final: {e}")
     summary = {
         'successful_count': len(successful_articles),
         'failed_count': len(failed_articles),

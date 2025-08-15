@@ -223,21 +223,46 @@ class ProgressFrame(ctk.CTkFrame):
         chart3_data = {'title': 'Desglose de Resultados', 'labels': list(source_counts.keys()), 'sizes': list(source_counts.values()), 'wedgeprops': dict(width=0.4)}
         self.chart3_canvas = self._create_chart(self.chart3_frame, self.chart3_canvas, chart3_data)
     def _create_chart(self, frame, canvas, chart_data):
-        if canvas: canvas.get_tk_widget().destroy()
-        for widget in frame.winfo_children(): widget.destroy()
-        if not chart_data['sizes'] or sum(chart_data['sizes']) == 0: ctk.CTkLabel(frame, text=f"{chart_data['title']}\n(Esperando datos)").pack(expand=True); return
-        is_dark = ctk.get_appearance_mode() == "Dark"; bg_color = "#242424" if is_dark else "#dbdbdb"; text_color = "#FFFFFF" if is_dark else "#000000"
-        fig = Figure(figsize=(4, 2.5), dpi=80, facecolor=bg_color)
+        is_dark = ctk.get_appearance_mode() == "Dark"
+        bg_color = "#242424" if is_dark else "#dbdbdb"
+        text_color = "#FFFFFF" if is_dark else "#000000"
+        if not canvas:
+            for widget in frame.winfo_children(): widget.destroy()
+            fig = Figure(figsize=(5, 3), dpi=90, facecolor=bg_color)
+            canvas = FigureCanvasTkAgg(fig, master=frame)
+            canvas.get_tk_widget().pack(side=ctk.TOP, fill=ctk.BOTH, expand=True)
+        fig = canvas.figure
+        fig.clear()
+        fig.set_facecolor(bg_color)
+        if not chart_data['sizes'] or sum(chart_data['sizes']) == 0:
+            ax = fig.add_subplot(111)
+            ax.set_title(chart_data['title'], color=text_color, fontsize=10)
+            ax.text(0.5, 0.5, "(Esperando datos)", ha='center', va='center', color=text_color)
+            canvas.draw()
+            return canvas
         ax = fig.add_subplot(111)
-        wedges, texts, autotexts = ax.pie(chart_data['sizes'], autopct='%1.1f%%', startangle=90, colors=chart_data.get('colors'), wedgeprops=chart_data.get('wedgeprops', {}), textprops={'color': text_color, 'fontsize': 8})
-        ax.legend(wedges, chart_data['labels'], title="Categorías", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1), prop={'size': 8}, title_fontproperties={'size':9, 'weight':'bold'}, labelcolor=text_color)
-        ax.set_title(chart_data['title'], color=text_color, fontsize=10); fig.tight_layout(pad=1.5)
-        new_canvas = FigureCanvasTkAgg(fig, master=frame); new_canvas.draw(); new_canvas.get_tk_widget().pack(side=ctk.TOP, fill=ctk.BOTH, expand=True)
-        return new_canvas
+        total_size = sum(chart_data['sizes'])
+        formatted_labels = [f"{label}: {size} ({size/total_size*100:.1f}%)" for label, size in zip(chart_data['labels'], chart_data['sizes'])]
+        wedges, texts = ax.pie(chart_data['sizes'], autopct='', startangle=90, colors=chart_data.get('colors'), wedgeprops=chart_data.get('wedgeprops', {}), textprops={'color': text_color, 'fontsize': 8})
+        ax.legend(wedges, formatted_labels, title="Categorías", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1), prop={'size': 8}, title_fontproperties={'size':9, 'weight':'bold'}, labelcolor='black')
+        ax.set_title(chart_data['title'], color=text_color, fontsize=10)
+        fig.tight_layout(pad=1.5)
+        canvas.draw()
+        return canvas
     def update_article_status(self, doi, success, source, reason):
         if doi in self.article_widgets:
             status_text = f"✅ Obtenido ({source})" if success else f"❌ Fallido"; color = "#34A853" if success else "#EA4335"
             self.article_widgets[doi]['status'].configure(text=status_text, text_color=color)
+            self.after(100, lambda: self._scroll_to_widget(self.article_widgets[doi]['status']))
+    def _scroll_to_widget(self, widget):
+        try:
+            self.article_list_frame.update_idletasks()
+            frame_height = self.article_list_frame._inner_frame.winfo_height()
+            widget_y = widget.winfo_y()
+            scroll_position = widget_y / frame_height
+            self.article_list_frame._parent_canvas.yview_moveto(max(0, min(1.0, scroll_position)))
+        except Exception:
+            pass
     def add_log_message(self, message):
         self.log_textbox.configure(state="normal"); self.log_textbox.insert("end", message + "\n"); self.log_textbox.see("end"); self.log_textbox.configure(state="disabled")
     def finalize_ui(self):
@@ -287,17 +312,32 @@ class ResultsFrame(ctk.CTkFrame):
         chart3_data = {'title': 'Desglose de Resultados', 'labels': list(source_counts.keys()), 'sizes': list(source_counts.values()), 'wedgeprops': dict(width=0.4)}
         self.chart3_canvas = self._create_chart(self.chart3_frame, self.chart3_canvas, chart3_data)
     def _create_chart(self, frame, canvas, chart_data):
-        if canvas: canvas.get_tk_widget().destroy()
-        for widget in frame.winfo_children(): widget.destroy()
-        if not chart_data['sizes'] or sum(chart_data['sizes']) == 0: ctk.CTkLabel(frame, text=f"{chart_data['title']}\n(No hay datos)").pack(expand=True); return
-        is_dark = ctk.get_appearance_mode() == "Dark"; bg_color = "#242424" if is_dark else "#dbdbdb"; text_color = "#FFFFFF" if is_dark else "#000000"
-        fig = Figure(figsize=(4, 2.5), dpi=100, facecolor=bg_color)
+        is_dark = ctk.get_appearance_mode() == "Dark"
+        bg_color = "#242424" if is_dark else "#dbdbdb"
+        text_color = "#FFFFFF" if is_dark else "#000000"
+        if not canvas:
+            for widget in frame.winfo_children(): widget.destroy()
+            fig = Figure(figsize=(5, 3), dpi=90, facecolor=bg_color)
+            canvas = FigureCanvasTkAgg(fig, master=frame)
+            canvas.get_tk_widget().pack(side=ctk.TOP, fill=ctk.BOTH, expand=True)
+        fig = canvas.figure
+        fig.clear()
+        fig.set_facecolor(bg_color)
+        if not chart_data['sizes'] or sum(chart_data['sizes']) == 0:
+            ax = fig.add_subplot(111)
+            ax.set_title(chart_data['title'], color=text_color, fontsize=10)
+            ax.text(0.5, 0.5, "(No hay datos)", ha='center', va='center', color=text_color)
+            canvas.draw()
+            return canvas
         ax = fig.add_subplot(111)
-        wedges, texts, autotexts = ax.pie(chart_data['sizes'], autopct='%1.1f%%', startangle=90, colors=chart_data.get('colors'), wedgeprops=chart_data.get('wedgeprops', {}), textprops={'color': text_color, 'fontsize': 8})
-        ax.legend(wedges, chart_data['labels'], title="Categorías", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1), prop={'size': 8}, title_fontproperties={'size':9, 'weight':'bold'}, labelcolor=text_color)
-        ax.set_title(chart_data['title'], color=text_color, fontsize=10); fig.tight_layout(pad=1.5)
-        new_canvas = FigureCanvasTkAgg(fig, master=frame); new_canvas.draw(); new_canvas.get_tk_widget().pack(side=ctk.TOP, fill=ctk.BOTH, expand=True)
-        return new_canvas
+        total_size = sum(chart_data['sizes'])
+        formatted_labels = [f"{label}: {size} ({size/total_size*100:.1f}%)" for label, size in zip(chart_data['labels'], chart_data['sizes'])]
+        wedges, texts = ax.pie(chart_data['sizes'], autopct='', startangle=90, colors=chart_data.get('colors'), wedgeprops=chart_data.get('wedgeprops', {}), textprops={'color': text_color, 'fontsize': 8})
+        ax.legend(wedges, formatted_labels, title="Categorías", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1), prop={'size': 8}, title_fontproperties={'size':9, 'weight':'bold'}, labelcolor='black')
+        ax.set_title(chart_data['title'], color=text_color, fontsize=10)
+        fig.tight_layout(pad=1.5)
+        canvas.draw()
+        return canvas
     def export_charts_to_excel(self, results):
         excel_path = results.get('excel_report_path')
         self.controller.add_log_message("Exportando gráficos a Excel...")

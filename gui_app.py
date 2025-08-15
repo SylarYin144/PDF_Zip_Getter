@@ -230,7 +230,7 @@ class ProgressFrame(ctk.CTkFrame):
         fig = Figure(figsize=(4, 2.5), dpi=80, facecolor=bg_color)
         ax = fig.add_subplot(111)
         wedges, texts, autotexts = ax.pie(chart_data['sizes'], autopct='%1.1f%%', startangle=90, colors=chart_data.get('colors'), wedgeprops=chart_data.get('wedgeprops', {}), textprops={'color': text_color, 'fontsize': 8})
-        ax.legend(wedges, chart_data['labels'], title="Categorías", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1), prop={'size': 8}, title_fontproperties={'size':9, 'weight':'bold', 'color':text_color}, labelcolor=text_color)
+        ax.legend(wedges, chart_data['labels'], title="Categorías", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1), prop={'size': 8}, title_fontproperties={'size':9, 'weight':'bold'}, labelcolor=text_color)
         ax.set_title(chart_data['title'], color=text_color, fontsize=10); fig.tight_layout(pad=1.5)
         new_canvas = FigureCanvasTkAgg(fig, master=frame); new_canvas.draw(); new_canvas.get_tk_widget().pack(side=ctk.TOP, fill=ctk.BOTH, expand=True)
         return new_canvas
@@ -294,7 +294,7 @@ class ResultsFrame(ctk.CTkFrame):
         fig = Figure(figsize=(4, 2.5), dpi=100, facecolor=bg_color)
         ax = fig.add_subplot(111)
         wedges, texts, autotexts = ax.pie(chart_data['sizes'], autopct='%1.1f%%', startangle=90, colors=chart_data.get('colors'), wedgeprops=chart_data.get('wedgeprops', {}), textprops={'color': text_color, 'fontsize': 8})
-        ax.legend(wedges, chart_data['labels'], title="Categorías", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1), prop={'size': 8}, title_fontproperties={'size':9, 'weight':'bold', 'color':text_color}, labelcolor=text_color)
+        ax.legend(wedges, chart_data['labels'], title="Categorías", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1), prop={'size': 8}, title_fontproperties={'size':9, 'weight':'bold'}, labelcolor=text_color)
         ax.set_title(chart_data['title'], color=text_color, fontsize=10); fig.tight_layout(pad=1.5)
         new_canvas = FigureCanvasTkAgg(fig, master=frame); new_canvas.draw(); new_canvas.get_tk_widget().pack(side=ctk.TOP, fill=ctk.BOTH, expand=True)
         return new_canvas

@@ -228,7 +228,7 @@ class ProgressFrame(ctk.CTkFrame):
         text_color = "#FFFFFF" if is_dark else "#000000"
         if not canvas:
             for widget in frame.winfo_children(): widget.destroy()
-            fig = Figure(figsize=(5, 3), dpi=90, facecolor=bg_color)
+            fig = Figure(figsize=(6, 3), dpi=90, facecolor=bg_color)
             canvas = FigureCanvasTkAgg(fig, master=frame)
             canvas.get_tk_widget().pack(side=ctk.TOP, fill=ctk.BOTH, expand=True)
         fig = canvas.figure
@@ -240,13 +240,13 @@ class ProgressFrame(ctk.CTkFrame):
             ax.text(0.5, 0.5, "(Esperando datos)", ha='center', va='center', color=text_color)
             canvas.draw()
             return canvas
+        fig.subplots_adjust(left=0.05, right=0.6)
         ax = fig.add_subplot(111)
         total_size = sum(chart_data['sizes'])
-        formatted_labels = [f"{label}: {size} ({size/total_size*100:.1f}%)" for label, size in zip(chart_data['labels'], chart_data['sizes'])]
+        formatted_labels = [f"{label}: {size} ({size/total_size*100:.1f}%)" if total_size > 0 else f"{label}: {size} (0.0%)" for label, size in zip(chart_data['labels'], chart_data['sizes'])]
         wedges, texts = ax.pie(chart_data['sizes'], autopct='', startangle=90, colors=chart_data.get('colors'), wedgeprops=chart_data.get('wedgeprops', {}), textprops={'color': text_color, 'fontsize': 8})
-        ax.legend(wedges, formatted_labels, title="Categorías", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1), prop={'size': 8}, title_fontproperties={'size':9, 'weight':'bold'}, labelcolor='black')
+        ax.legend(wedges, formatted_labels, title="Categorías", loc="center left", bbox_to_anchor=(1, 0.5), prop={'size': 8}, title_fontproperties={'size':9, 'weight':'bold'}, labelcolor='black')
         ax.set_title(chart_data['title'], color=text_color, fontsize=10)
-        fig.tight_layout(pad=1.5)
         canvas.draw()
         return canvas
     def update_article_status(self, doi, success, source, reason):
@@ -317,7 +317,7 @@ class ResultsFrame(ctk.CTkFrame):
         text_color = "#FFFFFF" if is_dark else "#000000"
         if not canvas:
             for widget in frame.winfo_children(): widget.destroy()
-            fig = Figure(figsize=(5, 3), dpi=90, facecolor=bg_color)
+            fig = Figure(figsize=(6, 3), dpi=90, facecolor=bg_color)
             canvas = FigureCanvasTkAgg(fig, master=frame)
             canvas.get_tk_widget().pack(side=ctk.TOP, fill=ctk.BOTH, expand=True)
         fig = canvas.figure
@@ -329,13 +329,13 @@ class ResultsFrame(ctk.CTkFrame):
             ax.text(0.5, 0.5, "(No hay datos)", ha='center', va='center', color=text_color)
             canvas.draw()
             return canvas
+        fig.subplots_adjust(left=0.05, right=0.6)
         ax = fig.add_subplot(111)
         total_size = sum(chart_data['sizes'])
-        formatted_labels = [f"{label}: {size} ({size/total_size*100:.1f}%)" for label, size in zip(chart_data['labels'], chart_data['sizes'])]
+        formatted_labels = [f"{label}: {size} ({size/total_size*100:.1f}%)" if total_size > 0 else f"{label}: {size} (0.0%)" for label, size in zip(chart_data['labels'], chart_data['sizes'])]
         wedges, texts = ax.pie(chart_data['sizes'], autopct='', startangle=90, colors=chart_data.get('colors'), wedgeprops=chart_data.get('wedgeprops', {}), textprops={'color': text_color, 'fontsize': 8})
-        ax.legend(wedges, formatted_labels, title="Categorías", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1), prop={'size': 8}, title_fontproperties={'size':9, 'weight':'bold'}, labelcolor='black')
+        ax.legend(wedges, formatted_labels, title="Categorías", loc="center left", bbox_to_anchor=(1, 0.5), prop={'size': 8}, title_fontproperties={'size':9, 'weight':'bold'}, labelcolor='black')
         ax.set_title(chart_data['title'], color=text_color, fontsize=10)
-        fig.tight_layout(pad=1.5)
         canvas.draw()
         return canvas
     def export_charts_to_excel(self, results):

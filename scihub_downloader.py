@@ -132,7 +132,6 @@ class SciHubDownloaderApp:
         controls_frame = ttk.Frame(right_column_frame); controls_frame.pack(fill=tk.X, pady=10)
         self.pause_button = ttk.Button(controls_frame, text="Pausar", command=self._toggle_pause); self.pause_button.pack(side=tk.LEFT, expand=True, padx=5)
         self.cancel_button = ttk.Button(controls_frame, text="Cancelar", command=self._cancel_download); self.cancel_button.pack(side=tk.LEFT, expand=True, padx=5)
-        self.back_button = ttk.Button(self.progress_frame, text="< Volver a Configuración", command=self._show_config_view); self.back_button.grid(row=1, column=1, sticky="sw", pady=10, padx=10)
         self._update_pie_charts()
     def _select_input_file(self):
         path = filedialog.askopenfilename(filetypes=(("Excel/CSV", "*.xlsx;*.xls;*.csv"), ("Todos", "*.*")))

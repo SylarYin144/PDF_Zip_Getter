@@ -14,30 +14,16 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import json
 import xml.etree.ElementTree as ET
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service as ChromeService
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import base64
 import csv
 import tempfile
+import itertools
 
 # --- Helper Functions ---
 STANDARD_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36'
 def clean_filename(title): return re.sub(r'[\\/*?:"<>|]', '_', title)
-def get_pdf_content_via_js(driver, pdf_url):
-    script="const c=arguments[arguments.length-1];fetch(arguments[0]).then(a=>{if(!a.ok)throw new Error('Network response was not ok: '+a.status+' '+a.statusText);return a.blob()}).then(a=>{if('application/pdf'!==a.type&&!arguments[0].toLowerCase().endsWith('.pdf')&&'application/octet-stream'!==a.type)throw new Error('Content-Type is not application/pdf or octet-stream: '+a.type);const e=new FileReader;e.onloadend=()=>{const b=';base64,',d=e.result.substring(e.result.indexOf(b)+b.length);c(d)},e.onerror=a=>{c({error:'FileReader error: '+a.toString()})},e.readAsDataURL(a)}).catch(a=>{c({error:'JS Fetch error: '+a.toString()})});"
-    try:
-        driver.set_script_timeout(90)
-        result = driver.execute_async_script(script, pdf_url)
-        if isinstance(result, dict) and 'error' in result: print(f"JS Fetch Helper Error: {result['error']}"); return None
-        return base64.b64decode(result) if result else None
-    except Exception as e: print(f"JS Fetch Helper Exception: {e}"); return None
 def extract_pdf_link_from_html(article_page_url, session):
     try:
         response = session.get(article_page_url, timeout=30); response.raise_for_status()
@@ -51,26 +37,49 @@ def extract_pdf_link_from_html(article_page_url, session):
         if embed and embed.get('src'): return urljoin(article_page_url, embed['src'])
         return None
     except Exception: return None
-def download_with_selenium_google_scholar(driver, doi, title, page_timeout, element_timeout):
-    print(f"Buscando en Google Scholar (Selenium) por DOI: {doi}"); scholar_url = f"https://scholar.google.com/scholar?hl=en&q={doi}"
+
+def download_from_google_scholar(doi, title, session):
+    print(f"Buscando en Google Scholar por DOI: {doi}")
+    scholar_url = f"https://scholar.google.com/scholar?hl=en&q={doi}"
     try:
-        driver.set_page_load_timeout(page_timeout); driver.get(scholar_url)
-        pdf_links = WebDriverWait(driver, element_timeout).until(EC.presence_of_all_elements_located((By.XPATH, "//a[contains(@href, '.pdf')]")))
-        pdf_url = pdf_links[0].get_attribute('href')
-        print(f"Intentando descargar desde URL: {pdf_url}"); pdf_content = get_pdf_content_via_js(driver, pdf_url)
-        return (pdf_content, "Google Scholar") if pdf_content else (None, "FALLO - No se pudo obtener contenido GS")
-    except Exception as e: print(f"Error en Selenium/Google Scholar: {e}"); return None, "FALLO - Excepción en GS"
-def download_with_selenium_pmc(driver, doi, title, page_timeout, element_timeout):
-    print(f"Buscando en PubMed Central (Selenium) por DOI: {doi}"); search_url = f"https://www.ncbi.nlm.nih.gov/pmc/?term={doi}"
+        headers = {'User-Agent': STANDARD_USER_AGENT, 'Accept-Language': 'en-US,en;q=0.9'}
+        response = session.get(scholar_url, headers=headers, timeout=30)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, 'html.parser')
+        for link_tag in soup.find_all('a', href=True):
+            href = link_tag['href']
+            if href.lower().endswith('.pdf'):
+                print(f"Intentando descargar desde URL: {href}")
+                pdf_response = session.get(href, headers=headers, timeout=60)
+                if 'application/pdf' in pdf_response.headers.get('Content-Type', ''):
+                    return pdf_response.content, "Google Scholar"
+        return None, "FALLO - No se encontró PDF en Google Scholar"
+    except Exception as e:
+        print(f"Error en Google Scholar: {e}")
+        return None, "FALLO - Excepción en Google Scholar"
+
+def download_from_pmc(doi, title, session):
+    print(f"Buscando en PubMed Central por DOI: {doi}")
     try:
-        driver.set_page_load_timeout(page_timeout); driver.get(search_url)
-        article_link = WebDriverWait(driver, element_timeout).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.rprt .title a")))
-        article_url = article_link.get_attribute('href'); driver.get(article_url)
-        pdf_link = WebDriverWait(driver, element_timeout).until(EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '.pdf') and contains(., 'PDF')]")))
-        pdf_url = pdf_link.get_attribute('href')
-        print(f"Intentando descargar desde URL: {pdf_url}"); pdf_content = get_pdf_content_via_js(driver, pdf_url)
-        return (pdf_content, "PMC") if pdf_content else (None, "FALLO - No se pudo obtener contenido PMC")
-    except Exception as e: print(f"Error en Selenium/PMC: {e}"); return None, "FALLO - Excepción en PMC"
+        id_conv_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids={doi}&format=json"
+        response_id = session.get(id_conv_url, timeout=20)
+        pmcid = response_id.json().get("records", [{}])[0].get("pmcid")
+        if not pmcid: return None, "FALLO - No se encontró PMCID"
+
+        article_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/"
+        response_html = session.get(article_url, timeout=30)
+        soup = BeautifulSoup(response_html.content, 'html.parser')
+
+        for link_tag in soup.select('div.format-menu a[href$=".pdf"]'):
+            pdf_url = urljoin(article_url, link_tag['href'])
+            print(f"Intentando descargar desde URL: {pdf_url}")
+            pdf_response = session.get(pdf_url, timeout=60)
+            if 'application/pdf' in pdf_response.headers.get('Content-Type', ''):
+                return pdf_response.content, "PMC"
+        return None, "FALLO - No se encontró link PDF en PMC"
+    except Exception as e:
+        print(f"Error en PMC: {e}")
+        return None, "FALLO - Excepción en PMC"
 
 class TextRedirector:
     def __init__(self, q): self.queue = q
@@ -84,8 +93,8 @@ class SciHubDownloaderApp:
         self.ui_queue = queue.Queue(); self.download_thread = None; self.df_articles = None
         self.pause_event = threading.Event(); self.cancel_event = threading.Event()
         self.input_file_path = tk.StringVar(); self.article_count_str = tk.StringVar(value="Detectados: 0 artículos"); self.zip_output_path = tk.StringVar(); self.report_output_path = tk.StringVar()
-        self.use_scihub = tk.BooleanVar(value=True); self.use_google_scholar = tk.BooleanVar(value=True); self.use_pmc = tk.BooleanVar(value=False)
-        self.inter_doi_delay = tk.IntVar(value=5); self.mirror_switch_delay = tk.IntVar(value=3); self.page_load_timeout = tk.IntVar(value=60); self.element_find_timeout = tk.IntVar(value=10)
+        self.use_scihub = tk.BooleanVar(value=True); self.use_google_scholar = tk.BooleanVar(value=True); self.use_pmc = tk.BooleanVar(value=True)
+        self.inter_doi_delay = tk.IntVar(value=5); self.mirror_switch_delay = tk.IntVar(value=3)
         self.progress_article_str = tk.StringVar(value="Artículo: 0/0 (0.0%)"); self.progress_title_str = tk.StringVar(value="Título: -"); self.progress_author_str = tk.StringVar(value="Autor: -")
         self.progress_journal_str = tk.StringVar(value="Revista: -"); self.progress_year_str = tk.StringVar(value="Año: -"); self.progress_doi_str = tk.StringVar(value="DOI: -")
         self.time_elapsed_str = tk.StringVar(value="Transcurrido: 0s"); self.time_avg_doi_str = tk.StringVar(value="Promedio/DOI: 0s"); self.time_remaining_str = tk.StringVar(value="Tiempo Restante: -")
@@ -98,15 +107,13 @@ class SciHubDownloaderApp:
         ttk.Label(files_frame, text="Seleccionar Archivo (.xlsx, .csv):").grid(row=0, column=0, sticky="w", pady=2); ttk.Entry(files_frame, textvariable=self.input_file_path, state="readonly").grid(row=0, column=1, sticky="ew", padx=5); ttk.Button(files_frame, text="Seleccionar...", command=self._select_input_file).grid(row=0, column=2, sticky="e")
         ttk.Label(files_frame, textvariable=self.article_count_str).grid(row=1, column=1, sticky="w", padx=5); ttk.Label(files_frame, text="Definir Ubicación del ZIP:").grid(row=2, column=0, sticky="w", pady=2); ttk.Entry(files_frame, textvariable=self.zip_output_path, state="readonly").grid(row=2, column=1, sticky="ew", padx=5); ttk.Button(files_frame, text="Guardar en...", command=self._select_zip_output).grid(row=2, column=2, sticky="e")
         sources_frame = ttk.LabelFrame(self.config_frame, text="Fuentes de Descarga y Reporte", padding="10"); sources_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=5); sources_frame.columnconfigure(1, weight=1)
-        ttk.Checkbutton(sources_frame, text="Usar Sci-Hub", variable=self.use_scihub).grid(row=0, column=0, sticky="w"); ttk.Checkbutton(sources_frame, text="Usar Google Scholar (respaldo)", variable=self.use_google_scholar).grid(row=1, column=0, sticky="w"); ttk.Checkbutton(sources_frame, text="Usar PubMed Central (PMC) (respaldo)", variable=self.use_pmc).grid(row=2, column=0, sticky="w")
+        ttk.Checkbutton(sources_frame, text="Usar Sci-Hub", variable=self.use_scihub).grid(row=0, column=0, sticky="w"); ttk.Checkbutton(sources_frame, text="Usar PubMed Central (respaldo)", variable=self.use_pmc).grid(row=1, column=0, sticky="w"); ttk.Checkbutton(sources_frame, text="Usar Google Scholar (respaldo)", variable=self.use_google_scholar).grid(row=2, column=0, sticky="w")
         ttk.Label(sources_frame, text="Definir Ruta de Reporte (.xlsx):").grid(row=3, column=0, sticky="w", pady=(10, 2)); ttk.Entry(sources_frame, textvariable=self.report_output_path, state="readonly").grid(row=3, column=1, sticky="ew", padx=5); ttk.Button(sources_frame, text="Guardar como...", command=self._select_report_output).grid(row=3, column=2, sticky="e")
         advanced_frame = ttk.LabelFrame(self.config_frame, text="Configuración Avanzada", padding="10"); advanced_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=5); advanced_frame.columnconfigure(0, weight=1)
         ttk.Label(advanced_frame, text="Mirrors de Sci-Hub (uno por línea):").grid(row=0, column=0, sticky="w"); self.mirrors_text = scrolledtext.ScrolledText(advanced_frame, height=5, wrap=tk.WORD); self.mirrors_text.grid(row=1, column=0, sticky="ew", pady=5); self.mirrors_text.insert(tk.END, "\n".join(["https://sci-hub.se/", "https://sci-hub.st/", "https://sci-hub.ru/", "https://sci-hub.red/"]))
         timeouts_frame = ttk.Frame(advanced_frame); timeouts_frame.grid(row=2, column=0, sticky="w", pady=5)
         ttk.Label(timeouts_frame, text="Espera entre búsquedas (s):").pack(side=tk.LEFT, padx=(0, 5)); ttk.Spinbox(timeouts_frame, from_=0, to=60, textvariable=self.inter_doi_delay, width=5).pack(side=tk.LEFT, padx=5); ttk.Label(timeouts_frame, text="Espera al cambiar de mirror (s):").pack(side=tk.LEFT, padx=(15, 5)); ttk.Spinbox(timeouts_frame, from_=0, to=60, textvariable=self.mirror_switch_delay, width=5).pack(side=tk.LEFT, padx=5)
-        selenium_timeouts_frame = ttk.Frame(advanced_frame); selenium_timeouts_frame.grid(row=3, column=0, sticky="w", pady=5)
-        ttk.Label(selenium_timeouts_frame, text="Timeout Carga Página (s):").pack(side=tk.LEFT, padx=(0, 5)); ttk.Spinbox(selenium_timeouts_frame, from_=10, to=300, textvariable=self.page_load_timeout, width=5).pack(side=tk.LEFT, padx=5); ttk.Label(selenium_timeouts_frame, text="Timeout Búsqueda Elemento (s):").pack(side=tk.LEFT, padx=(15, 5)); ttk.Spinbox(selenium_timeouts_frame, from_=5, to=60, textvariable=self.element_find_timeout, width=5).pack(side=tk.LEFT, padx=5)
-        style = ttk.Style(); style.configure("Big.TButton", font=("Helvetica", 12, "bold")); self.start_button = ttk.Button(self.config_frame, text="Iniciar Descarga", style="Big.TButton", command=self._start_download_process); self.start_button.grid(row=4, column=0, pady=20, ipady=5)
+        style = ttk.Style(); style.configure("Big.TButton", font=("Helvetica", 12, "bold")); self.start_button = ttk.Button(self.config_frame, text="Iniciar Descarga", style="Big.TButton", command=self._start_download_process); self.start_button.grid(row=3, column=0, pady=20, ipady=5)
     def _create_progress_widgets(self):
         self.progress_frame.columnconfigure(0, weight=1); self.progress_frame.columnconfigure(1, weight=1); self.progress_frame.rowconfigure(0, weight=1)
         left_column_frame = ttk.Frame(self.progress_frame); left_column_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10)); left_column_frame.columnconfigure(0, weight=1); left_column_frame.rowconfigure(1, weight=1)
@@ -138,17 +145,10 @@ class SciHubDownloaderApp:
         if path: self.input_file_path.set(path);
         try: self.df_articles = pd.read_excel(path) if path.lower().endswith(('.xlsx', '.xls')) else pd.read_csv(path); self.article_count_str.set(f"Detectados: {len(self.df_articles)} artículos")
         except Exception as e: messagebox.showerror("Error de Lectura", f"No se pudo leer el archivo:\n{e}"); self.df_articles = None
-    def _select_zip_output(self):
-        path = filedialog.asksaveasfilename(defaultextension=".zip", filetypes=(("Archivos ZIP", "*.zip"),))
-        if path:
-            self.zip_output_path.set(path)
-
-    def _select_report_output(self):
-        path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=(("Archivos Excel", "*.xlsx"),), initialfile="SciHub_Reporte.xlsx")
-        if path:
-            self.report_output_path.set(path)
+    def _select_zip_output(self): path = filedialog.asksaveasfilename(defaultextension=".zip", filetypes=(("Archivos ZIP", "*.zip"),));
+    def _select_report_output(self): path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=(("Archivos Excel", "*.xlsx"),), initialfile="SciHub_Reporte.xlsx");
     def _start_download_process(self):
-        config = {"input_file": self.input_file_path.get(), "zip_output": self.zip_output_path.get(), "report_output": self.report_output_path.get(), "use_scihub": self.use_scihub.get(), "use_google_scholar": self.use_google_scholar.get(), "use_pmc": self.use_pmc.get(), "mirrors": [m.strip() for m in self.mirrors_text.get("1.0", tk.END).strip().split("\n") if m.strip()], "inter_doi_delay": self.inter_doi_delay.get(), "mirror_switch_delay": self.mirror_switch_delay.get(), "page_load_timeout": self.page_load_timeout.get(), "element_find_timeout": self.element_find_timeout.get()}
+        config = {"input_file": self.input_file_path.get(), "zip_output": self.zip_output_path.get(), "report_output": self.report_output_path.get(), "use_scihub": self.use_scihub.get(), "use_google_scholar": self.use_google_scholar.get(), "use_pmc": self.use_pmc.get(), "mirrors": [m.strip() for m in self.mirrors_text.get("1.0", tk.END).strip().split("\n") if m.strip()], "inter_doi_delay": self.inter_doi_delay.get(), "mirror_switch_delay": self.mirror_switch_delay.get()}
         if not config["input_file"] or not config["zip_output"]: messagebox.showwarning("Faltan Datos", "Especifique el archivo de entrada y la ubicación del ZIP."); return
         if self.df_articles is None: messagebox.showerror("Error de Archivo", "No se ha cargado la lista de artículos."); return
         self.pause_event.clear(); self.cancel_event.clear(); self.pause_button.config(text="Pausar")
@@ -186,17 +186,13 @@ class SciHubDownloaderApp:
     def _cancel_download(self):
         if messagebox.askokcancel("Cancelar", "Esto detendrá el proceso de descarga actual. ¿Está seguro?"): self.cancel_event.set()
     def _download_worker(self, config, q):
-        sys.stdout = TextRedirector(q); start_time_total = time.time(); driver = None; stats = {'successful': 0, 'failed': 0, 'pending': len(self.df_articles), 'sources': {}}
+        sys.stdout = TextRedirector(q); start_time_total = time.time(); stats = {'successful': 0, 'failed': 0, 'pending': len(self.df_articles), 'sources': {}}
         temp_dir = tempfile.gettempdir(); success_csv_path = os.path.join(temp_dir, f"scihub_success_{os.getpid()}.csv"); fail_csv_path = os.path.join(temp_dir, f"scihub_fail_{os.getpid()}.csv")
         f_success, f_fail = None, None
         try:
             f_success = open(success_csv_path, 'w', newline='', encoding='utf-8'); f_fail = open(fail_csv_path, 'w', newline='', encoding='utf-8')
             success_writer = csv.writer(f_success); fail_writer = csv.writer(f_fail)
             header = list(self.df_articles.columns); success_writer.writerow(header + ["source"]); fail_writer.writerow(header + ["reason"])
-            if config['use_google_scholar'] or config['use_pmc']:
-                print("Inicializando WebDriver..."); options = webdriver.ChromeOptions(); options.add_argument('--headless'); options.add_argument('--disable-gpu'); options.add_argument('--no-sandbox'); options.add_argument('--disable-dev-shm-usage')
-                try: driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options); print("WebDriver inicializado.")
-                except Exception as e: print(f"ALERTA: WebDriver no pudo iniciar: {e}"); driver = None
             session = requests.Session(); session.headers.update({'User-Agent': STANDARD_USER_AGENT}); total_articles = len(self.df_articles)
             with zipfile.ZipFile(config['zip_output'], 'w', zipfile.ZIP_DEFLATED) as zf:
                 for index, row in self.df_articles.iterrows():
@@ -215,8 +211,8 @@ class SciHubDownloaderApp:
                                 print(f"Intentando mirror Sci-Hub: {mirror}"); pdf_content = extract_pdf_link_from_html(f"{mirror}{doi}", session)
                                 if pdf_content: source = "Sci-Hub"; break
                                 time.sleep(config['mirror_switch_delay'])
-                        if not pdf_content and config['use_google_scholar'] and driver: pdf_content, source = download_with_selenium_google_scholar(driver, doi, title, config['page_load_timeout'], config['element_find_timeout'])
-                        if not pdf_content and config['use_pmc'] and driver: pdf_content, source = download_with_selenium_pmc(driver, doi, title, config['page_load_timeout'], config['element_find_timeout'])
+                        if not pdf_content and config['use_pmc']: pdf_content, source = download_from_pmc(doi, title, session)
+                        if not pdf_content and config['use_google_scholar']: pdf_content, source = download_from_google_scholar(doi, title, session)
                     stats['pending'] -= 1; row_values = list(original_row_data.values())
                     if pdf_content:
                         stats['successful'] += 1; stats['sources'][source] = stats['sources'].get(source, 0) + 1
@@ -225,24 +221,17 @@ class SciHubDownloaderApp:
                         stats['failed'] += 1; status, tag = ("Fallido", "fallido"); fail_writer.writerow(row_values + [reason])
                     q.put({'type': 'article_status', 'data': {'row_id': index, 'doi': doi, 'title': title, 'status': status, 'tag': tag, 'stats': stats}})
                     time.sleep(config['inter_doi_delay'])
-            # --- Final Report Generation ---
             if config.get('report_output'):
                 print("Generando reporte Excel desde archivos CSV temporales...")
                 try:
-                    # Ensure files are closed before reading
                     if f_success: f_success.close(); f_success = None
                     if f_fail: f_fail.close(); f_fail = None
-
-                    df_obtenidos = pd.read_csv(success_csv_path)
-                    df_fallidos = pd.read_csv(fail_csv_path)
-
+                    df_obtenidos = pd.read_csv(success_csv_path); df_fallidos = pd.read_csv(fail_csv_path)
                     with pd.ExcelWriter(config['report_output'], engine='openpyxl') as writer:
-                        df_obtenidos.to_excel(writer, sheet_name='Obtenidos', index=False)
                         df_fallidos.to_excel(writer, sheet_name='Fallidos', index=False)
+                        df_obtenidos.to_excel(writer, sheet_name='Obtenidos', index=False)
                     print(f"Reporte Excel guardado en: {config['report_output']}")
-                except Exception as e:
-                    print(f"Error al generar el reporte Excel: {e}")
-
+                except Exception as e: print(f"Error al generar el reporte Excel: {e}")
             summary_msg = f"Proceso completado.\n\nDescargas exitosas: {stats['successful']}/{total_articles}"
             if self.cancel_event.is_set(): summary_msg = f"Proceso cancelado.\n\nDescargas completadas: {stats['successful']}/{total_articles}"
             q.put({'type': 'finished', 'data': summary_msg})
@@ -250,22 +239,13 @@ class SciHubDownloaderApp:
             print(f"\nERROR CRÍTICO: {e}"); import traceback; traceback.print_exc()
             q.put({'type': 'finished', 'data': f"El proceso ha fallado con un error crítico:\n{e}"})
         finally:
-            if f_success: f_success.close()
+            if f_success: f_success.close();
             if f_fail: f_fail.close()
-
-            # --- Cleanup Temporary Files ---
             print("Limpiando archivos temporales...")
             try:
-                if os.path.exists(success_csv_path):
-                    os.remove(success_csv_path)
-                    print(f"Eliminado: {success_csv_path}")
-                if os.path.exists(fail_csv_path):
-                    os.remove(fail_csv_path)
-                    print(f"Eliminado: {fail_csv_path}")
-            except Exception as e:
-                print(f"Error durante la limpieza de archivos temporales: {e}")
-
-            if driver: print("Cerrando WebDriver..."); driver.quit()
+                if os.path.exists(success_csv_path): os.remove(success_csv_path); print(f"Eliminado: {success_csv_path}")
+                if os.path.exists(fail_csv_path): os.remove(fail_csv_path); print(f"Eliminado: {fail_csv_path}")
+            except Exception as e: print(f"Error durante la limpieza de archivos temporales: {e}")
             sys.stdout = sys.__stdout__
     def _show_config_view(self): self.progress_frame.pack_forget(); self.config_frame.pack(fill=tk.BOTH, expand=True)
     def _on_closing(self):

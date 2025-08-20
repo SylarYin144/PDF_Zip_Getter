@@ -363,9 +363,10 @@ class SciHubDownloaderApp:
                     except Exception as e: self.queue.put({"type": "error", "text": f"Error WebDriver: {e}"}); return
 
                 engine = None
-                if input_file.endswith('.xlsx'):
+                file_ext = os.path.splitext(input_file)[1].lower()
+                if file_ext == '.xlsx':
                     engine = 'openpyxl'
-                elif input_file.endswith('.xls'):
+                elif file_ext == '.xls':
                     engine = 'xlrd'
 
                 df = pd.read_excel(input_file, engine=engine).fillna('')

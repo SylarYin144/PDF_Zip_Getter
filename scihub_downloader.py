@@ -20,16 +20,11 @@ import tempfile
 
 # --- Helper Functions ---
 STANDARD_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36'
-
-def clean_filename(title):
-    return re.sub(r'[\\/*?:"<>|]', '_', title)
-
+def clean_filename(title): return re.sub(r'[\\/*?:"<>|]', '_', title)
 def extract_pdf_link_from_html(article_page_url, session):
     try:
-        response = session.get(article_page_url, timeout=30)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
-        iframe = soup.find('iframe', id='pdf')
+        response = session.get(article_page_url, timeout=30); response.raise_for_status()
+        soup = BeautifulSoup(response.content, 'html.parser'); iframe = soup.find('iframe', id='pdf')
         if iframe and iframe.get('src'):
             pdf_src = iframe['src']
             if pdf_src.startswith('//'): return 'https:' + pdf_src
@@ -47,30 +42,22 @@ def download_from_google_scholar(query, session):
     scholar_url = f"https://scholar.google.com/scholar?hl=en&q={quote_plus(query)}"
     try:
         headers = {'User-Agent': STANDARD_USER_AGENT, 'Accept-Language': 'en-US,en;q=0.9'}
-        response = session.get(scholar_url, headers=headers, timeout=30)
-        response.raise_for_status()
+        response = session.get(scholar_url, headers=headers, timeout=30); response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
-
         potential_links = []
         for link_tag in soup.find_all('a', href=True):
             href = link_tag.get('href', '')
-            if href.lower().endswith('.pdf') and 'scholar.google.com' not in href:
-                potential_links.append(href)
-
+            if href.lower().endswith('.pdf') and 'scholar.google.com' not in href: potential_links.append(href)
         print(f"Encontrados {len(potential_links)} links PDF potenciales en Google Scholar.")
         for pdf_url in potential_links:
             try:
                 print(f"Intentando descargar desde: {pdf_url}")
                 pdf_response = session.get(pdf_url, headers=headers, timeout=60, allow_redirects=True)
                 if 'application/pdf' in pdf_response.headers.get('Content-Type', '').lower() and len(pdf_response.content) > 1000:
-                    print(f"Descarga exitosa desde: {pdf_url}")
-                    return pdf_response.content, "Google Scholar"
-            except Exception as e:
-                print(f"Intento fallido para {pdf_url}: {e}")
+                    print(f"Descarga exitosa desde: {pdf_url}"); return pdf_response.content, "Google Scholar"
+            except Exception as e: print(f"Intento fallido para {pdf_url}: {e}")
         return None, "FALLO - No se encontró PDF válido en Google Scholar"
-    except Exception as e:
-        print(f"Error en Google Scholar: {e}")
-        return None, "FALLO - Excepción en Google Scholar"
+    except Exception as e: print(f"Error en Google Scholar: {e}"); return None, "FALLO - Excepción en Google Scholar"
 
 def download_from_pmc(query, session):
     print(f"Buscando en PubMed Central por: '{query}'")
@@ -78,32 +65,21 @@ def download_from_pmc(query, session):
         pmcid = None
         if re.match(r'10.\d{4,9}/[-._;()/:A-Z0-9]+$', query, re.IGNORECASE):
             id_conv_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids={query}&format=json"
-            response_id = session.get(id_conv_url, timeout=20)
-            pmcid = response_id.json().get("records", [{}])[0].get("pmcid")
-
+            response_id = session.get(id_conv_url, timeout=20); pmcid = response_id.json().get("records", [{}])[0].get("pmcid")
         if not pmcid:
             search_url = f"https://www.ncbi.nlm.nih.gov/pmc/?term={quote_plus(query)}"
-            response_search = session.get(search_url, timeout=30)
-            soup_search = BeautifulSoup(response_search.content, 'html.parser')
+            response_search = session.get(search_url, timeout=30); soup_search = BeautifulSoup(response_search.content, 'html.parser')
             article_link_tag = soup_search.find('div', class_='rprt').find('a')
             if not article_link_tag: return None, "FALLO - No se encontró artículo en PMC"
             article_url = urljoin(search_url, article_link_tag['href'])
-        else:
-            article_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/"
-
-        response_html = session.get(article_url, timeout=30)
-        soup = BeautifulSoup(response_html.content, 'html.parser')
-
+        else: article_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/"
+        response_html = session.get(article_url, timeout=30); soup = BeautifulSoup(response_html.content, 'html.parser')
         for link_tag in soup.select('div.format-menu a[href$=".pdf"], .pdf-btn a[href$=".pdf"]'):
             pdf_url = urljoin(article_url, link_tag['href'])
-            print(f"Intentando descargar desde URL: {pdf_url}")
-            pdf_response = session.get(pdf_url, timeout=60)
-            if 'application/pdf' in pdf_response.headers.get('Content-Type', '') and len(pdf_response.content) > 1000:
-                return pdf_response.content, "PMC"
+            print(f"Intentando descargar desde URL: {pdf_url}"); pdf_response = session.get(pdf_url, timeout=60)
+            if 'application/pdf' in pdf_response.headers.get('Content-Type', '') and len(pdf_response.content) > 1000: return pdf_response.content, "PMC"
         return None, "FALLO - No se encontró link PDF en PMC"
-    except Exception as e:
-        print(f"Error en PMC: {e}")
-        return None, "FALLO - Excepción en PMC"
+    except Exception as e: print(f"Error en PMC: {e}"); return None, "FALLO - Excepción en PMC"
 
 class TextRedirector:
     def __init__(self, q): self.queue = q

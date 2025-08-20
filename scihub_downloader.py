@@ -30,11 +30,12 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 DEFAULT_SCI_HUB_MIRRORS_EXAMPLE = ["https://sci-hub.se/", "https://sci-hub.st/", "https://sci-hub.box/", "https://sci-hub.ru/", "https://sci-hub.red/"]
 INTER_DOI_DELAY_SECONDS = 5
 MIRROR_SWITCH_DELAY_SECONDS = 3
+PAGE_LOAD_TIMEOUT_SECONDS = 30
+PDF_DOWNLOAD_TIMEOUT_SECONDS = 60
 STANDARD_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36'
 
 class SciHubDownloaderApp:
     def __init__(self):
-        # --- GUI Elements (initialized in create_gui) ---
         self.root = None
         self.progress_window = None
         self.progress_bar = None
@@ -42,11 +43,7 @@ class SciHubDownloaderApp:
         self.log_text = None
         self.charts = {}
         self.pause_resume_button = None
-
-        # --- Tkinter Variables (initialized in create_gui) ---
         self.tk_vars = {}
-
-        # --- Default Configuration (standard Python types) ---
         self.config = {
             'input_file_path': "",
             'zip_path': "",
@@ -56,10 +53,10 @@ class SciHubDownloaderApp:
             'use_google_scholar': True,
             'inter_doi_delay': INTER_DOI_DELAY_SECONDS,
             'mirror_switch_delay': MIRROR_SWITCH_DELAY_SECONDS,
+            'page_load_timeout': PAGE_LOAD_TIMEOUT_SECONDS,
+            'pdf_download_timeout': PDF_DOWNLOAD_TIMEOUT_SECONDS,
             'scihub_mirrors': ", ".join(DEFAULT_SCI_HUB_MIRRORS_EXAMPLE)
         }
-
-        # --- Threading and Queue ---
         self.download_thread = None
         self.message_queue = queue.Queue()
         self.is_paused = threading.Event()
@@ -67,33 +64,21 @@ class SciHubDownloaderApp:
         self.driver = None
 
     def get_config(self, key):
-        """Helper to get config value from the correct source (tk_vars or self.config)."""
-        if self.root: # GUI is active
+        if self.root:
             return self.tk_vars[key].get()
-        else: # Headless/test mode
-            return self.config[key]
+        return self.config[key]
 
     def create_gui(self):
-        """Creates the entire GUI. Must be called to run in GUI mode."""
         self.root = tk.Tk()
         self.root.title("Sci-Hub Downloader")
-
-        # --- Initialize Tkinter variables ---
-        self.tk_vars['input_file_path'] = tk.StringVar(value=self.config['input_file_path'])
-        self.tk_vars['zip_path'] = tk.StringVar(value=self.config['zip_path'])
-        self.tk_vars['excel_report_path'] = tk.StringVar(value=self.config['excel_report_path'])
-        self.tk_vars['use_scihub'] = tk.BooleanVar(value=self.config['use_scihub'])
-        self.tk_vars['use_pmc'] = tk.BooleanVar(value=self.config['use_pmc'])
-        self.tk_vars['use_google_scholar'] = tk.BooleanVar(value=self.config['use_google_scholar'])
-        self.tk_vars['inter_doi_delay'] = tk.IntVar(value=self.config['inter_doi_delay'])
-        self.tk_vars['mirror_switch_delay'] = tk.IntVar(value=self.config['mirror_switch_delay'])
-        self.tk_vars['scihub_mirrors'] = tk.StringVar(value=self.config['scihub_mirrors'])
-
+        for key, value in self.config.items():
+            if isinstance(value, bool): self.tk_vars[key] = tk.BooleanVar(value=value)
+            elif isinstance(value, int): self.tk_vars[key] = tk.IntVar(value=value)
+            else: self.tk_vars[key] = tk.StringVar(value=value)
         self.create_config_window()
         return self.root
-        
+
     def create_config_window(self):
-        """Creates the initial configuration window."""
         config_frame = ttk.Frame(self.root, padding="20")
         config_frame.pack(fill=tk.BOTH, expand=True)
         config_frame.columnconfigure(1, weight=1)
@@ -117,12 +102,16 @@ class SciHubDownloaderApp:
         ttk.Checkbutton(sources_frame, text="PubMed Central (PMC)", variable=self.tk_vars['use_pmc']).pack(side=tk.LEFT, padx=15, pady=5)
         ttk.Checkbutton(sources_frame, text="Google Scholar", variable=self.tk_vars['use_google_scholar']).pack(side=tk.LEFT, padx=15, pady=5)
 
-        delays_frame = ttk.LabelFrame(config_frame, text="Retrasos (segundos)", padding="10")
+        delays_frame = ttk.LabelFrame(config_frame, text="Tiempos de Espera (segundos)", padding="10")
         delays_frame.grid(row=2, column=0, columnspan=3, sticky=tk.EW, pady=5)
-        ttk.Label(delays_frame, text="Entre cada DOI:").pack(side=tk.LEFT, padx=5)
-        ttk.Entry(delays_frame, textvariable=self.tk_vars['inter_doi_delay'], width=5).pack(side=tk.LEFT, padx=5)
-        ttk.Label(delays_frame, text="Al cambiar de Mirror:").pack(side=tk.LEFT, padx=15)
-        ttk.Entry(delays_frame, textvariable=self.tk_vars['mirror_switch_delay'], width=5).pack(side=tk.LEFT, padx=5)
+        ttk.Label(delays_frame, text="Entre DOIs:").pack(side=tk.LEFT, padx=5)
+        ttk.Entry(delays_frame, textvariable=self.tk_vars['inter_doi_delay'], width=5).pack(side=tk.LEFT)
+        ttk.Label(delays_frame, text="Entre Mirrors:").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Entry(delays_frame, textvariable=self.tk_vars['mirror_switch_delay'], width=5).pack(side=tk.LEFT)
+        ttk.Label(delays_frame, text="Carga de Página:").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Entry(delays_frame, textvariable=self.tk_vars['page_load_timeout'], width=5).pack(side=tk.LEFT)
+        ttk.Label(delays_frame, text="Descarga de PDF:").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Entry(delays_frame, textvariable=self.tk_vars['pdf_download_timeout'], width=5).pack(side=tk.LEFT)
 
         mirrors_frame = ttk.LabelFrame(config_frame, text="Mirrors de Sci-Hub (separados por coma)", padding="10")
         mirrors_frame.grid(row=3, column=0, columnspan=3, sticky=tk.EW, pady=5)
@@ -273,7 +262,7 @@ class SciHubDownloaderApp:
 
     def cancel_download(self):
         do_cancel = True
-        if self.root: # Only show messagebox if in GUI mode
+        if self.root:
             do_cancel = messagebox.askyesno("Cancelar", "¿Está seguro?")
 
         if do_cancel:
@@ -308,7 +297,7 @@ class SciHubDownloaderApp:
             .catch(error => callback({error: 'JS Fetch error: ' + error.toString()}));
         """
         try:
-            driver.set_script_timeout(90)
+            driver.set_script_timeout(self.get_config('pdf_download_timeout'))
             result = driver.execute_async_script(script, pdf_url)
             if isinstance(result, dict) and 'error' in result:
                 self.log_message(f"JS Helper Error for {pdf_url}: {result['error']}")
@@ -323,7 +312,7 @@ class SciHubDownloaderApp:
 
     def extract_pdf_link_from_html(self, article_page_url, session):
         try:
-            response = session.get(article_page_url, timeout=30)
+            response = session.get(article_page_url, timeout=self.get_config('page_load_timeout'))
             response.raise_for_status()
             soup = BeautifulSoup(response.content, 'html.parser')
             iframe = soup.find('iframe', id='pdf')
@@ -345,11 +334,11 @@ class SciHubDownloaderApp:
             try:
                 pdf_download_url = self.extract_pdf_link_from_html(full_url, session)
                 if pdf_download_url:
-                    response = session.get(pdf_download_url, timeout=60)
+                    response = session.get(pdf_download_url, timeout=self.get_config('pdf_download_timeout'))
                     response.raise_for_status()
                     if 'application/pdf' in response.headers.get('Content-Type', '').lower():
                         return response.content, f"OBTENIDO (Sci-Hub Iframe/Embed - {mirror_base_url})"
-                response = session.get(full_url, timeout=30)
+                response = session.get(full_url, timeout=self.get_config('page_load_timeout'))
                 response.raise_for_status()
                 if 'application/pdf' in response.headers.get('Content-Type', '').lower():
                     return response.content, f"OBTENIDO (Sci-Hub Direct - {mirror_base_url})"
@@ -359,39 +348,90 @@ class SciHubDownloaderApp:
                 time.sleep(self.get_config('mirror_switch_delay'))
         return None, "FALLO - No se pudo descargar desde Sci-Hub"
 
-    def download_from_pmc(self, doi, session):
+    def download_from_pmc(self, doi, title, session):
         self.log_message(f"Intentando con PubMed Central para DOI: {doi}")
-        if not self.driver: return None, "FALLO - Driver no inicializado"
-        return self.download_with_selenium_pmc(self.driver, doi, "")
+        try:
+            session.headers.update({'User-Agent': STANDARD_USER_AGENT})
+            id_conv_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids={doi}&format=json"
+            response_id_conv = session.get(id_conv_url, timeout=self.get_config('page_load_timeout'))
+            response_id_conv.raise_for_status()
+            data_id_conv = response_id_conv.json()
 
-    def download_from_google_scholar(self, doi, session):
-        self.log_message(f"Intentando con Google Scholar para DOI: {doi}")
-        if not self.driver: return None, "FALLO - Driver no inicializado"
-        return self.download_with_selenium_google_scholar(self.driver, doi, "")
+            pmcid = data_id_conv.get("records")[0].get("pmcid") if data_id_conv.get("records") else None
+            if not pmcid: return None, f"FALLO - PMCID no encontrado para DOI {doi}"
+
+            efetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pmc&id={pmcid}&rettype=xml"
+            response_efetch = session.get(efetch_url, timeout=self.get_config('page_load_timeout'))
+            response_efetch.raise_for_status()
+            root = ET.fromstring(response_efetch.content)
+
+            pdf_link_element = root.find(".//*[@content-type='pdf']")
+            if pdf_link_element is not None:
+                pdf_filename = pdf_link_element.get('{http://www.w3.org/1999/xlink}href')
+                if pdf_filename:
+                    pdf_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/pdf/{pdf_filename}"
+                    pdf_response = session.get(pdf_url, timeout=self.get_config('pdf_download_timeout'))
+                    pdf_response.raise_for_status()
+                    if 'application/pdf' in pdf_response.headers.get('Content-Type', '').lower():
+                        return pdf_response.content, f"OBTENIDO (PMC API {pmcid})"
+
+            article_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/"
+            response_html = session.get(article_url, timeout=self.get_config('page_load_timeout'))
+            response_html.raise_for_status()
+            soup = BeautifulSoup(response_html.content, 'html.parser')
+            pdf_link_tag = soup.select_one('a.format-pdf, a[href$=".pdf"]')
+            if pdf_link_tag:
+                pdf_url_html = urljoin(article_url, pdf_link_tag['href'])
+                pdf_response = session.get(pdf_url_html, timeout=self.get_config('pdf_download_timeout'))
+                pdf_response.raise_for_status()
+                if 'application/pdf' in pdf_response.headers.get('Content-Type', '').lower():
+                    return pdf_response.content, f"OBTENIDO (PMC HTML {pmcid})"
+
+            return None, f"FALLO - PDF no encontrado en página HTML PMC ({article_url})"
+        except Exception as e:
+            self.log_message(f"Error en PubMed Central para DOI {doi}: {e}")
+            return None, f"FALLO - Error inesperado en PubMed Central para {doi}"
+
+    def download_from_google_scholar(self, doi, title, session):
+        self.log_message(f"Intentando con Google Scholar para DOI: {doi} (Title: {title})")
+        if not self.driver:
+            self.log_message("Omitiendo Google Scholar: WebDriver no está disponible.")
+            return None, "FALLO - Driver no inicializado"
+        return self.download_with_selenium_google_scholar(self.driver, doi, title)
 
     def download_with_selenium_pmc(self, driver, doi, title):
+        self.log_message(f"SELENIUM PMC: Buscando en PubMed Central DOI: {doi}")
         search_url = f"https://www.ncbi.nlm.nih.gov/pmc/?term={doi}"
         try:
+            driver.set_page_load_timeout(self.get_config('page_load_timeout'))
             driver.get(search_url)
             article_link = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.rprt .title a")))
             article_url = article_link.get_attribute('href')
             driver.get(article_url)
-            pdf_link = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "a.format-pdf")))
+            pdf_link = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "a.format-pdf, a[href$='.pdf']")))
             pdf_url = pdf_link.get_attribute('href')
+
             pdf_content = self.get_pdf_content_via_js(driver, pdf_url)
-            return (pdf_content, f"OBTENIDO (PMC Selenium - {pdf_url})") if pdf_content else (None, "FALLO - No se pudo obtener contenido PDF desde PMC")
+            if pdf_content:
+                return pdf_content, f"OBTENIDO (PMC Selenium - {pdf_url})"
+            return None, "FALLO - No se pudo obtener contenido PDF desde PMC (Selenium)"
         except (TimeoutException, NoSuchElementException) as e:
             self.log_message(f"Error en Selenium (PMC) para DOI {doi}: {e}")
             return None, "FALLO - No se encontró el PDF en PMC (Selenium)"
 
     def download_with_selenium_google_scholar(self, driver, doi, title):
+        self.log_message(f"SELENIUM GS: Buscando en Google Scholar DOI: {doi}")
         scholar_url = f"https://scholar.google.com/scholar?hl=en&q={doi}"
         try:
+            driver.set_page_load_timeout(self.get_config('page_load_timeout'))
             driver.get(scholar_url)
             pdf_link_element = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '.pdf')]")))
             pdf_url = pdf_link_element.get_attribute('href')
+
             pdf_content = self.get_pdf_content_via_js(driver, pdf_url)
-            return (pdf_content, f"OBTENIDO (Google Scholar Selenium - {pdf_url})") if pdf_content else (None, "FALLO - No se pudo obtener contenido PDF desde Google Scholar")
+            if pdf_content:
+                return pdf_content, f"OBTENIDO (Google Scholar Selenium - {pdf_url})"
+            return None, "FALLO - No se pudo obtener contenido PDF desde Google Scholar (Selenium)"
         except (TimeoutException, NoSuchElementException) as e:
             self.log_message(f"Error en Selenium (Google Scholar) para DOI {doi}: {e}")
             return None, "FALLO - No se encontró el PDF en Google Scholar (Selenium)"
@@ -433,10 +473,10 @@ class SciHubDownloaderApp:
                     if self.get_config('use_scihub'): pdf_content, status_msg = self.download_from_scihub(doi, session, user_mirrors)
                     if not pdf_content and self.get_config('use_pmc'):
                         if self.check_for_pause_or_cancel(): break
-                        pdf_content, status_msg = self.download_from_pmc(doi, session)
+                        pdf_content, status_msg = self.download_from_pmc(doi, effective_title, session)
                     if not pdf_content and self.get_config('use_google_scholar'):
                         if self.check_for_pause_or_cancel(): break
-                        pdf_content, status_msg = self.download_from_google_scholar(doi, session)
+                        pdf_content, status_msg = self.download_from_google_scholar(doi, effective_title, session)
                     
                     stats['current'] = index + 1; stats['pending'] -= 1
                     if pdf_content:

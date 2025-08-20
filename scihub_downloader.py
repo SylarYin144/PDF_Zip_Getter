@@ -33,38 +33,31 @@ MIRROR_SWITCH_DELAY_SECONDS = 3
 STANDARD_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36'
 
 class SciHubDownloaderApp:
-    def __init__(self, is_test_mode=False):
-        self.is_test_mode = is_test_mode
-        
-        # --- GUI Elements (initialized later) ---
+    def __init__(self):
+        # --- GUI Elements (initialized in create_gui) ---
         self.root = None
         self.progress_window = None
         self.progress_bar = None
         self.stats_label = None
         self.log_text = None
         self.charts = {}
-        
-        # --- State Variables (can be tk or regular vars) ---
-        if not is_test_mode:
-            self.input_file_path = tk.StringVar()
-            self.zip_path = tk.StringVar()
-            self.excel_report_path = tk.StringVar()
-            self.use_scihub = tk.BooleanVar(value=True)
-            self.use_pmc = tk.BooleanVar(value=True)
-            self.use_google_scholar = tk.BooleanVar(value=True)
-            self.inter_doi_delay = tk.IntVar(value=INTER_DOI_DELAY_SECONDS)
-            self.mirror_switch_delay = tk.IntVar(value=MIRROR_SWITCH_DELAY_SECONDS)
-            self.scihub_mirrors = tk.StringVar(value=", ".join(DEFAULT_SCI_HUB_MIRRORS_EXAMPLE))
-        else: # Use regular variables for test mode
-            self.input_file_path = ""
-            self.zip_path = ""
-            self.excel_report_path = ""
-            self.use_scihub = True
-            self.use_pmc = True
-            self.use_google_scholar = True
-            self.inter_doi_delay = INTER_DOI_DELAY_SECONDS
-            self.mirror_switch_delay = MIRROR_SWITCH_DELAY_SECONDS
-            self.scihub_mirrors = ", ".join(DEFAULT_SCI_HUB_MIRRORS_EXAMPLE)
+        self.pause_resume_button = None
+
+        # --- Tkinter Variables (initialized in create_gui) ---
+        self.tk_vars = {}
+
+        # --- Default Configuration (standard Python types) ---
+        self.config = {
+            'input_file_path': "",
+            'zip_path': "",
+            'excel_report_path': "",
+            'use_scihub': True,
+            'use_pmc': True,
+            'use_google_scholar': True,
+            'inter_doi_delay': INTER_DOI_DELAY_SECONDS,
+            'mirror_switch_delay': MIRROR_SWITCH_DELAY_SECONDS,
+            'scihub_mirrors': ", ".join(DEFAULT_SCI_HUB_MIRRORS_EXAMPLE)
+        }
 
         # --- Threading and Queue ---
         self.download_thread = None
@@ -74,16 +67,28 @@ class SciHubDownloaderApp:
         self.driver = None
 
     def get_config(self, key):
-        """Helper to get config value whether in GUI or test mode."""
-        if self.is_test_mode:
-            return getattr(self, key)
-        else:
-            return getattr(self, key).get()
+        """Helper to get config value from the correct source (tk_vars or self.config)."""
+        if self.root: # GUI is active
+            return self.tk_vars[key].get()
+        else: # Headless/test mode
+            return self.config[key]
 
     def create_gui(self):
         """Creates the entire GUI. Must be called to run in GUI mode."""
         self.root = tk.Tk()
         self.root.title("Sci-Hub Downloader")
+
+        # --- Initialize Tkinter variables ---
+        self.tk_vars['input_file_path'] = tk.StringVar(value=self.config['input_file_path'])
+        self.tk_vars['zip_path'] = tk.StringVar(value=self.config['zip_path'])
+        self.tk_vars['excel_report_path'] = tk.StringVar(value=self.config['excel_report_path'])
+        self.tk_vars['use_scihub'] = tk.BooleanVar(value=self.config['use_scihub'])
+        self.tk_vars['use_pmc'] = tk.BooleanVar(value=self.config['use_pmc'])
+        self.tk_vars['use_google_scholar'] = tk.BooleanVar(value=self.config['use_google_scholar'])
+        self.tk_vars['inter_doi_delay'] = tk.IntVar(value=self.config['inter_doi_delay'])
+        self.tk_vars['mirror_switch_delay'] = tk.IntVar(value=self.config['mirror_switch_delay'])
+        self.tk_vars['scihub_mirrors'] = tk.StringVar(value=self.config['scihub_mirrors'])
+
         self.create_config_window()
         return self.root
         
@@ -97,65 +102,65 @@ class SciHubDownloaderApp:
         paths_frame.grid(row=0, column=0, columnspan=3, sticky=tk.EW, pady=5)
         paths_frame.columnconfigure(1, weight=1)
         ttk.Label(paths_frame, text="Archivo de Entrada (Excel/CSV):").grid(row=0, column=0, sticky=tk.W, pady=5, padx=5)
-        ttk.Entry(paths_frame, textvariable=self.input_file_path, width=60).grid(row=0, column=1, sticky=tk.EW, padx=5)
+        ttk.Entry(paths_frame, textvariable=self.tk_vars['input_file_path'], width=60).grid(row=0, column=1, sticky=tk.EW, padx=5)
         ttk.Button(paths_frame, text="Examinar...", command=self.browse_input_file).grid(row=0, column=2, padx=5)
         ttk.Label(paths_frame, text="Guardar ZIP en:").grid(row=1, column=0, sticky=tk.W, pady=5, padx=5)
-        ttk.Entry(paths_frame, textvariable=self.zip_path, width=60).grid(row=1, column=1, sticky=tk.EW, padx=5)
+        ttk.Entry(paths_frame, textvariable=self.tk_vars['zip_path'], width=60).grid(row=1, column=1, sticky=tk.EW, padx=5)
         ttk.Button(paths_frame, text="Examinar...", command=self.browse_zip_path).grid(row=1, column=2, padx=5)
         ttk.Label(paths_frame, text="Guardar Reporte en (Opcional):").grid(row=2, column=0, sticky=tk.W, pady=5, padx=5)
-        ttk.Entry(paths_frame, textvariable=self.excel_report_path, width=60).grid(row=2, column=1, sticky=tk.EW, padx=5)
+        ttk.Entry(paths_frame, textvariable=self.tk_vars['excel_report_path'], width=60).grid(row=2, column=1, sticky=tk.EW, padx=5)
         ttk.Button(paths_frame, text="Examinar...", command=self.browse_report_path).grid(row=2, column=2, padx=5)
 
         sources_frame = ttk.LabelFrame(config_frame, text="Fuentes de Descarga", padding="10")
         sources_frame.grid(row=1, column=0, columnspan=3, sticky=tk.EW, pady=10)
-        ttk.Checkbutton(sources_frame, text="Sci-Hub", variable=self.use_scihub).pack(side=tk.LEFT, padx=15, pady=5)
-        ttk.Checkbutton(sources_frame, text="PubMed Central (PMC)", variable=self.use_pmc).pack(side=tk.LEFT, padx=15, pady=5)
-        ttk.Checkbutton(sources_frame, text="Google Scholar", variable=self.use_google_scholar).pack(side=tk.LEFT, padx=15, pady=5)
+        ttk.Checkbutton(sources_frame, text="Sci-Hub", variable=self.tk_vars['use_scihub']).pack(side=tk.LEFT, padx=15, pady=5)
+        ttk.Checkbutton(sources_frame, text="PubMed Central (PMC)", variable=self.tk_vars['use_pmc']).pack(side=tk.LEFT, padx=15, pady=5)
+        ttk.Checkbutton(sources_frame, text="Google Scholar", variable=self.tk_vars['use_google_scholar']).pack(side=tk.LEFT, padx=15, pady=5)
 
         delays_frame = ttk.LabelFrame(config_frame, text="Retrasos (segundos)", padding="10")
         delays_frame.grid(row=2, column=0, columnspan=3, sticky=tk.EW, pady=5)
         ttk.Label(delays_frame, text="Entre cada DOI:").pack(side=tk.LEFT, padx=5)
-        ttk.Entry(delays_frame, textvariable=self.inter_doi_delay, width=5).pack(side=tk.LEFT, padx=5)
+        ttk.Entry(delays_frame, textvariable=self.tk_vars['inter_doi_delay'], width=5).pack(side=tk.LEFT, padx=5)
         ttk.Label(delays_frame, text="Al cambiar de Mirror:").pack(side=tk.LEFT, padx=15)
-        ttk.Entry(delays_frame, textvariable=self.mirror_switch_delay, width=5).pack(side=tk.LEFT, padx=5)
+        ttk.Entry(delays_frame, textvariable=self.tk_vars['mirror_switch_delay'], width=5).pack(side=tk.LEFT, padx=5)
 
         mirrors_frame = ttk.LabelFrame(config_frame, text="Mirrors de Sci-Hub (separados por coma)", padding="10")
         mirrors_frame.grid(row=3, column=0, columnspan=3, sticky=tk.EW, pady=5)
         mirrors_frame.columnconfigure(0, weight=1)
-        ttk.Entry(mirrors_frame, textvariable=self.scihub_mirrors).grid(row=0, column=0, sticky=tk.EW)
+        ttk.Entry(mirrors_frame, textvariable=self.tk_vars['scihub_mirrors']).grid(row=0, column=0, sticky=tk.EW)
 
         ttk.Button(config_frame, text="Iniciar Descarga", command=self.start_download_process).grid(row=4, column=0, columnspan=3, pady=20)
 
     def browse_input_file(self):
         path = filedialog.askopenfilename(title="Seleccionar archivo con DOIs", filetypes=(("Archivos Excel", "*.xlsx *.xls"), ("Archivos CSV", "*.csv"), ("Todos los archivos", "*.*")))
-        if path: self.input_file_path.set(path)
+        if path: self.tk_vars['input_file_path'].set(path)
 
     def browse_zip_path(self):
         path = filedialog.asksaveasfilename(title="Guardar archivo ZIP como...", defaultextension=".zip", filetypes=(("Archivos ZIP", "*.zip"),))
-        if path: self.zip_path.set(path)
+        if path: self.tk_vars['zip_path'].set(path)
 
     def browse_report_path(self):
         path = filedialog.asksaveasfilename(title="Guardar Reporte Excel como...", defaultextension=".xlsx", filetypes=(("Archivos Excel", "*.xlsx"),))
-        if path: self.excel_report_path.set(path)
+        if path: self.tk_vars['excel_report_path'].set(path)
 
     def start_download_process(self):
         if not self.get_config('input_file_path') or not self.get_config('zip_path'):
-            if not self.is_test_mode: messagebox.showerror("Error", "Debe especificar el archivo de entrada y la ruta del ZIP de salida.")
+            if self.root: messagebox.showerror("Error", "Debe especificar el archivo de entrada y la ruta del ZIP de salida.")
             else: print("ERROR: Input file or zip path not set.")
             return
         if not (self.get_config('use_scihub') or self.get_config('use_pmc') or self.get_config('use_google_scholar')):
-            if not self.is_test_mode: messagebox.showerror("Error", "Debe seleccionar al menos una fuente de descarga.")
+            if self.root: messagebox.showerror("Error", "Debe seleccionar al menos una fuente de descarga.")
             else: print("ERROR: No download source selected.")
             return
 
-        if not self.is_test_mode: self.create_progress_window()
+        if self.root: self.create_progress_window()
         self.is_cancelled.clear()
         self.is_paused.clear()
 
         self.download_thread = threading.Thread(target=self.download_worker, daemon=True)
         self.download_thread.start()
 
-        if not self.is_test_mode: self.root.after(100, self.process_queue)
+        if self.root: self.root.after(100, self.process_queue)
 
     def create_progress_window(self):
         self.progress_window = tk.Toplevel(self.root)
@@ -210,8 +215,7 @@ class SciHubDownloaderApp:
         return {'fig': fig, 'ax': ax, 'canvas': canvas}
 
     def update_charts(self, stats):
-        if self.is_test_mode or not self.progress_window or not self.progress_window.winfo_exists(): return
-        # Chart update logic remains the same...
+        if not self.root or not self.progress_window or not self.progress_window.winfo_exists(): return
         status_ax = self.charts['status']['ax']
         status_ax.clear()
         status_labels = 'Obtenidos', 'Fallidos', 'Pendientes'
@@ -268,7 +272,11 @@ class SciHubDownloaderApp:
             self.log_message("Descarga pausada.")
 
     def cancel_download(self):
-        if self.is_test_mode or messagebox.askyesno("Cancelar", "¿Está seguro?"):
+        do_cancel = True
+        if self.root: # Only show messagebox if in GUI mode
+            do_cancel = messagebox.askyesno("Cancelar", "¿Está seguro?")
+
+        if do_cancel:
             self.is_cancelled.set()
             self.is_paused.clear()
             self.log_message("Cancelando descarga...")
@@ -283,10 +291,7 @@ class SciHubDownloaderApp:
             time.sleep(0.5)
         return False
 
-    # All download and helper methods (clean_filename, download_from_scihub, etc.) go here
-    # They are unchanged from the previous version but must be methods of the class (with `self`).
     def get_pdf_content_via_js(self, driver, pdf_url):
-        # (Same implementation as before, just as a method)
         script = """
         const callback = arguments[arguments.length - 1];
         fetch(arguments[0])
@@ -399,7 +404,7 @@ class SciHubDownloaderApp:
                 self.driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
                 self.log_message("WebDriver inicializado.")
             except Exception as e:
-                self.log_message(f"ALERTA: No se pudo inicializar Selenium. Error: {e}")
+                self.log_message(f"ALERTA: No se pudo inicializar Selenium. Las descargas de PMC y Google Scholar no estarán disponibles. Error: {e}")
                 self.driver = None
 
             input_path = self.get_config('input_file_path')

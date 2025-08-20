@@ -306,11 +306,27 @@ class SciHubDownloaderApp:
         stats = self.stats_counters; self.ax1.clear(); self.ax2.clear(); self.ax3.clear()
         self.fig.suptitle("Estadísticas de Descarga", fontsize=14)
         self.ax1.set_title('Estado General'); self.ax2.set_title('Obtenidos vs. Fallidos'); self.ax3.set_title('Fuentes de Éxito')
-        self.ax1.pie([stats['obtenidos'], stats['fallidos'], stats["total"] - stats["procesados"]], labels=['Obtenidos', 'Fallidos', 'Pendientes'], autopct='%1.1f%%', startangle=90, colors=['#4CAF50', '#F44336', '#9E9E9E'])
-        if stats['obtenidos'] > 0 or stats['fallidos'] > 0: self.ax2.pie([stats['obtenidos'], stats['fallidos']], labels=['Obtenidos', 'Fallidos'], autopct='%1.1f%%', startangle=90, colors=['#4CAF50', '#F44336'])
-        else: self.ax2.text(0.5, 0.5, 'Esperando...', ha='center', va='center')
-        if stats['fuentes']: self.ax3.pie(list(stats['fuentes'].values()), labels=list(stats['fuentes'].keys()), autopct='%1.1f%%', startangle=90)
-        else: self.ax3.text(0.5, 0.5, 'Esperando...', ha='center', va='center')
+
+        # Chart 1
+        sizes1 = [stats['obtenidos'], stats['fallidos'], stats["total"] - stats["procesados"]]
+        if sum(sizes1) > 0:
+            self.ax1.pie(sizes1, labels=['Obtenidos', 'Fallidos', 'Pendientes'], autopct='%1.1f%%', startangle=90, colors=['#4CAF50', '#F44336', '#9E9E9E'])
+        else:
+            self.ax1.text(0.5, 0.5, 'Esperando...', ha='center', va='center')
+
+        # Chart 2
+        sizes2 = [stats['obtenidos'], stats['fallidos']]
+        if sum(sizes2) > 0:
+            self.ax2.pie(sizes2, labels=['Obtenidos', 'Fallidos'], autopct='%1.1f%%', startangle=90, colors=['#4CAF50', '#F44336'])
+        else:
+            self.ax2.text(0.5, 0.5, 'Esperando...', ha='center', va='center')
+
+        # Chart 3
+        if stats['fuentes']:
+            self.ax3.pie(list(stats['fuentes'].values()), labels=list(stats['fuentes'].keys()), autopct='%1.1f%%', startangle=90)
+        else:
+            self.ax3.text(0.5, 0.5, 'Esperando...', ha='center', va='center')
+
         self.chart_canvas.draw()
 
     def _update_progress_ui(self):

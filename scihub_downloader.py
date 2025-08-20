@@ -362,7 +362,13 @@ class SciHubDownloaderApp:
                         driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
                     except Exception as e: self.queue.put({"type": "error", "text": f"Error WebDriver: {e}"}); return
 
-                df = pd.read_excel(input_file).fillna('')
+                engine = None
+                if input_file.endswith('.xlsx'):
+                    engine = 'openpyxl'
+                elif input_file.endswith('.xls'):
+                    engine = 'xlrd'
+
+                df = pd.read_excel(input_file, engine=engine).fillna('')
                 self.stats_counters["total"] = len(df); self.queue.put({"type": "stats", "stats": self.stats_counters})
                 self.queue.put({"type": "log", "text": f"Se encontraron {len(df)} artículos."})
 

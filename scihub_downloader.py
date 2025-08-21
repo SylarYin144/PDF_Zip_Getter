@@ -40,12 +40,9 @@ class TextRedirector:
         self.widget.insert(tk.END, str_)
         self.widget.see(tk.END)
         self.widget.configure(state='disabled')
-        self.original_stdout.write(str_)
-        self.original_stdout.flush()
 
     def flush(self):
         self.widget.update_idletasks()
-        self.original_stdout.flush()
 
     def restore(self):
         sys.stdout = self.original_stdout
@@ -97,6 +94,7 @@ class Downloader:
             return None
 
     def download_with_selenium_pmc(self, driver, doi, title):
+        print(f"SELENIUM PMC: Searching for DOI: {doi}")
         search_url = f"https://www.ncbi.nlm.nih.gov/pmc/?term={doi}"
         try:
             driver.get(search_url)
@@ -107,10 +105,59 @@ class Downloader:
             pdf_url = pdf_link_element.get_attribute('href')
             pdf_content = self.get_pdf_content_via_js(driver, pdf_url)
             if pdf_content:
-                return pdf_content, f"OBTENIDO (PMC Selenium - {pdf_url})"
+                return pdf_content, f"OBTENIDO (PMC Selenium)"
         except Exception as e:
             print(f"SELENIUM PMC: Error for DOI {doi}: {e}")
         return None, "FALLO - No PDF en PMC (Selenium)"
+
+    def download_with_selenium_google_scholar(self, driver, doi, title):
+        print(f"SELENIUM GS: Searching for DOI: {doi}")
+        scholar_url = f"https://scholar.google.com/scholar?hl=en&q={doi}"
+        try:
+            driver.get(scholar_url)
+            WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.ID, "gs_res_ccl_mid")))
+
+            pdf_links_elements = driver.find_elements(By.XPATH, "//a[contains(@href, '.pdf')]")
+            if not pdf_links_elements:
+                 pdf_links_elements = driver.find_elements(By.PARTIAL_LINK_TEXT, "[PDF]")
+
+            for link_el in pdf_links_elements:
+                pdf_url = link_el.get_attribute('href')
+                if pdf_url:
+                    pdf_content = self.get_pdf_content_via_js(driver, pdf_url)
+                    if pdf_content:
+                        return pdf_content, f"OBTENIDO (GS Selenium)"
+        except Exception as e:
+            print(f"SELENIUM GS: Error for DOI {doi}: {e}")
+        return None, "FALLO - No PDF en GS (Selenium)"
+
+    def attempt_single_download(self, doi, title, mirrors, mirror_switch_delay, session, driver):
+        # Attempt 1: Sci-Hub
+        for mirror in mirrors:
+            if self.cancel_event.is_set(): return None, "CANCELADO"
+            try:
+                pdf_url = self.extract_pdf_link_from_html(f"{mirror}{doi}", session)
+                if pdf_url:
+                    pdf_response = session.get(pdf_url, timeout=60)
+                    if 'application/pdf' in pdf_response.headers.get('Content-Type', ''):
+                        return pdf_response.content, f"OBTENIDO (Sci-Hub: {mirror.split('//')[1].split('/')[0]})"
+            except requests.exceptions.RequestException:
+                time.sleep(mirror_switch_delay)
+                continue
+
+        # Attempt 2: Google Scholar with Selenium
+        if driver and not self.cancel_event.is_set():
+            pdf_content, status = self.download_with_selenium_google_scholar(driver, doi, title)
+            if pdf_content:
+                return pdf_content, status
+
+        # Attempt 3: PMC with Selenium
+        if driver and not self.cancel_event.is_set():
+            pdf_content, status = self.download_with_selenium_pmc(driver, doi, title)
+            if pdf_content:
+                return pdf_content, status
+
+        return None, "FALLO"
 
     def run(self, input_file_path, zip_path, excel_report_path, inter_doi_delay, mirror_switch_delay, mirrors):
         driver = None
@@ -131,7 +178,6 @@ class Downloader:
             print(f"Error al inicializar WebDriver: {e}. Se omitirán descargas con Selenium.")
 
         temp_pdf_paths = []
-        all_articles_log = []
         successful_articles_data = []
         failed_articles_data = []
 
@@ -141,46 +187,25 @@ class Downloader:
 
             try:
                 df = pd.read_excel(input_file_path) if input_file_path.endswith(('.xlsx', '.xls')) else pd.read_csv(input_file_path)
-                original_input_columns = [col for col in df.columns if col not in ['DOI', 'Title']]
             except Exception as e:
                 print(f"Error al leer archivo de entrada: {e}")
                 return
 
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
                 total_articles = len(df)
+                print(f"--- Proceso de Descarga Iniciado: {total_articles} artículos ---")
+
+                # Main download loop
                 for index, row in df.iterrows():
-                    if self.cancel_event.is_set():
-                        print("\nProceso cancelado.")
-                        break
-                    while self.pause_event.is_set():
-                        time.sleep(1)
+                    if self.cancel_event.is_set(): break
+                    while self.pause_event.is_set(): time.sleep(1)
 
                     doi = str(row.get('DOI', '')).strip()
                     title = str(row.get('Title', '')).strip() or doi
-                    if not doi:
-                        continue
+                    if not doi: continue
 
-                    print(f"\nProcesando {index+1}/{total_articles}: {title}")
-                    pdf_content, status = None, "FALLO"
-                    
-                    # Attempt 1: Sci-Hub
-                    for mirror in mirrors:
-                        if self.cancel_event.is_set(): break
-                        try:
-                            pdf_url = self.extract_pdf_link_from_html(f"{mirror}{doi}", session)
-                            if pdf_url:
-                                pdf_response = session.get(pdf_url, timeout=60)
-                                if 'application/pdf' in pdf_response.headers.get('Content-Type', ''):
-                                    pdf_content, status = pdf_response.content, f"OBTENIDO (Sci-Hub: {mirror})"
-                                    break
-                        except requests.exceptions.RequestException:
-                            time.sleep(mirror_switch_delay)
-                            continue
-
-                    # Attempt 2: PMC with Selenium
-                    if not pdf_content and driver:
-                        if self.cancel_event.is_set(): break
-                        pdf_content, status = self.download_with_selenium_pmc(driver, doi, title)
+                    print(f"\n({index+1}/{total_articles}) Procesando: {title}")
+                    pdf_content, status = self.attempt_single_download(doi, title, mirrors, mirror_switch_delay, session, driver)
 
                     if pdf_content:
                         filename = self.clean_filename(title)[:150] + ".pdf"
@@ -195,8 +220,39 @@ class Downloader:
                         print(f"-> {status}")
                         failed_articles_data.append(row.to_dict())
 
-                    if index < total_articles - 1:
+                    if index < total_articles - 1 and not self.cancel_event.is_set():
                         time.sleep(inter_doi_delay)
+
+                # Retry loop
+                if failed_articles_data and not self.cancel_event.is_set():
+                    print(f"\n--- Reintentando {len(failed_articles_data)} artículos fallidos ---")
+                    still_failed_data = []
+                    for item_dict in failed_articles_data:
+                        if self.cancel_event.is_set(): break
+                        while self.pause_event.is_set(): time.sleep(1)
+
+                        doi = str(item_dict.get('DOI', '')).strip()
+                        title = str(item_dict.get('Title', '')).strip() or doi
+                        print(f"\nReintentando: {title}")
+
+                        pdf_content, status = self.attempt_single_download(doi, title, mirrors, mirror_switch_delay, session, driver)
+
+                        if pdf_content:
+                            filename = self.clean_filename(title)[:150] + ".pdf"
+                            temp_path = os.path.join("temp_pdfs", filename)
+                            with open(temp_path, 'wb') as f: f.write(pdf_content)
+                            zf.write(temp_path, arcname=filename)
+                            temp_pdf_paths.append(temp_path)
+                            print(f"-> {status} (en reintento)")
+                            successful_articles_data.append(item_dict)
+                        else:
+                            print(f"-> {status} (en reintento)")
+                            still_failed_data.append(item_dict)
+
+                        if not self.cancel_event.is_set():
+                            time.sleep(inter_doi_delay)
+
+                    failed_articles_data = still_failed_data
 
             if excel_report_path:
                 try:
@@ -205,9 +261,9 @@ class Downloader:
                         pd.DataFrame(failed_articles_data).to_excel(writer, sheet_name='Fallidos', index=False)
                     print(f"\nReporte Excel guardado en: {excel_report_path}")
                 except Exception as e:
-                    print(f"Error al guardar el reporte Excel: {e}")
+                    print(f"\nError al guardar el reporte Excel: {e}")
 
-            print("\nProceso de descarga completado.")
+            print("\n--- Proceso Finalizado ---")
         finally:
             if driver:
                 driver.quit()
@@ -316,6 +372,7 @@ class SciHubDownloaderApp:
     def update_ui_for_running(self, is_running):
         state = "disabled" if is_running else "normal"
         self.start_button.config(state=state)
+        # Disable all config widgets when running
         for child in self.root.winfo_children():
             if isinstance(child, Frame):
                 for widget in child.winfo_children():

@@ -93,8 +93,34 @@ class Downloader:
         except requests.exceptions.RequestException:
             return None
 
+    def download_from_pmc(self, doi, session):
+        print("-> Trying PMC (API)...")
+        try:
+            id_conv_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids={doi}&format=json"
+            response_id_conv = session.get(id_conv_url, timeout=20)
+            response_id_conv.raise_for_status()
+            data_id_conv = response_id_conv.json()
+            pmcid = data_id_conv.get("records", [{}])[0].get("pmcid")
+            if not pmcid: return None, "FALLO - No PMCID found (API)"
+
+            article_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/"
+            response_html = session.get(article_url, timeout=30)
+            response_html.raise_for_status()
+            soup = BeautifulSoup(response_html.content, 'html.parser')
+
+            pdf_link_tag = soup.select_one("a.format-pdf, a.pdf-download, .format-menu a[href$='.pdf']")
+            if pdf_link_tag and pdf_link_tag.get('href'):
+                pdf_url = urljoin(article_url, pdf_link_tag['href'])
+                pdf_response = session.get(pdf_url, timeout=60)
+                pdf_response.raise_for_status()
+                if 'application/pdf' in pdf_response.headers.get('Content-Type', ''):
+                    return pdf_response.content, "OBTENIDO (PMC API)"
+        except Exception as e:
+            print(f"-> PMC (API) Error: {e}")
+        return None, "FALLO - PMC (API)"
+
     def download_with_selenium_pmc(self, driver, doi, title):
-        print(f"SELENIUM PMC: Searching for DOI: {doi}")
+        print("-> Trying PMC (Selenium)...")
         search_url = f"https://www.ncbi.nlm.nih.gov/pmc/?term={doi}"
         try:
             driver.get(search_url)
@@ -105,13 +131,13 @@ class Downloader:
             pdf_url = pdf_link_element.get_attribute('href')
             pdf_content = self.get_pdf_content_via_js(driver, pdf_url)
             if pdf_content:
-                return pdf_content, f"OBTENIDO (PMC Selenium)"
+                return pdf_content, "OBTENIDO (PMC Selenium)"
         except Exception as e:
-            print(f"SELENIUM PMC: Error for DOI {doi}: {e}")
-        return None, "FALLO - No PDF en PMC (Selenium)"
+            print(f"-> PMC (Selenium) Error: {e}")
+        return None, "FALLO - PMC (Selenium)"
 
     def download_with_selenium_google_scholar(self, driver, doi, title):
-        print(f"SELENIUM GS: Searching for DOI: {doi}")
+        print("-> Trying Google Scholar (Selenium)...")
         scholar_url = f"https://scholar.google.com/scholar?hl=en&q={doi}"
         try:
             driver.get(scholar_url)
@@ -126,13 +152,14 @@ class Downloader:
                 if pdf_url:
                     pdf_content = self.get_pdf_content_via_js(driver, pdf_url)
                     if pdf_content:
-                        return pdf_content, f"OBTENIDO (GS Selenium)"
+                        return pdf_content, "OBTENIDO (GS Selenium)"
         except Exception as e:
-            print(f"SELENIUM GS: Error for DOI {doi}: {e}")
-        return None, "FALLO - No PDF en GS (Selenium)"
+            print(f"-> GS (Selenium) Error: {e}")
+        return None, "FALLO - GS (Selenium)"
 
     def attempt_single_download(self, doi, title, mirrors, mirror_switch_delay, session, driver):
         # Attempt 1: Sci-Hub
+        print("-> Trying Sci-Hub...")
         for mirror in mirrors:
             if self.cancel_event.is_set(): return None, "CANCELADO"
             try:
@@ -145,13 +172,18 @@ class Downloader:
                 time.sleep(mirror_switch_delay)
                 continue
 
-        # Attempt 2: Google Scholar with Selenium
+        # Attempt 2: PMC API
+        pdf_content, status = self.download_from_pmc(doi, session)
+        if pdf_content:
+            return pdf_content, status
+
+        # Attempt 3: Google Scholar with Selenium
         if driver and not self.cancel_event.is_set():
             pdf_content, status = self.download_with_selenium_google_scholar(driver, doi, title)
             if pdf_content:
                 return pdf_content, status
 
-        # Attempt 3: PMC with Selenium
+        # Attempt 4: PMC with Selenium
         if driver and not self.cancel_event.is_set():
             pdf_content, status = self.download_with_selenium_pmc(driver, doi, title)
             if pdf_content:
@@ -214,10 +246,10 @@ class Downloader:
                         with open(temp_path, 'wb') as f: f.write(pdf_content)
                         zf.write(temp_path, arcname=filename)
                         temp_pdf_paths.append(temp_path)
-                        print(f"-> {status}")
+                        print(f"-> ÉXITO: {status}")
                         successful_articles_data.append(row.to_dict())
                     else:
-                        print(f"-> {status}")
+                        print(f"-> FALLO")
                         failed_articles_data.append(row.to_dict())
 
                     if index < total_articles - 1 and not self.cancel_event.is_set():
@@ -243,10 +275,10 @@ class Downloader:
                             with open(temp_path, 'wb') as f: f.write(pdf_content)
                             zf.write(temp_path, arcname=filename)
                             temp_pdf_paths.append(temp_path)
-                            print(f"-> {status} (en reintento)")
+                            print(f"-> ÉXITO (en reintento): {status}")
                             successful_articles_data.append(item_dict)
                         else:
-                            print(f"-> {status} (en reintento)")
+                            print(f"-> FALLO (en reintento)")
                             still_failed_data.append(item_dict)
 
                         if not self.cancel_event.is_set():

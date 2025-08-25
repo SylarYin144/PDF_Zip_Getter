@@ -1038,6 +1038,58 @@ def download_from_pmc(doi, title, session): # Renamed from download_from_pmc_fix
         # print(f"FIXED PMC: Unexpected error for DOI {doi}: {e}\n{traceback.format_exc()}") # Verbose
         return None, f"FALLO - Error inesperado en PubMed Central para {doi} ({str(e)[:50]})"
 
+def write_live_report(report_path, articles_log, original_input_columns):
+    """
+    Writes a live report to an Excel file with a single sheet.
+    This overwrites the file completely on each call.
+    """
+    if not report_path:
+        return
+
+    try:
+        report_df = pd.DataFrame(articles_log)
+
+        # Use a copy of the original columns to avoid modifying the list in place
+        final_cols = list(original_input_columns)
+
+        # Discover all keys from the log data to build a complete column set
+        if articles_log:
+            all_data_keys = set()
+            for item in articles_log:
+                all_data_keys.update(item.keys())
+
+            # These are keys that are not part of the new status columns
+            new_status_cols_set = {'Successful_Mirror', 'Start_Time', 'End_Time', 'Duration_Seconds', 'Detailed_Status', 'Failure_Reason'}
+            original_data_keys = [k for k in all_data_keys if k not in new_status_cols_set]
+
+            for key in original_data_keys:
+                if key not in final_cols:
+                    final_cols.append(key)
+
+        # Define the desired order of new status columns
+        new_status_cols_ordered = ['Successful_Mirror', 'Start_Time', 'End_Time', 'Duration_Seconds', 'Detailed_Status', 'Failure_Reason']
+
+        # Add the new status columns to the final list
+        for col in new_status_cols_ordered:
+            if col in report_df.columns and col not in final_cols:
+                final_cols.append(col)
+
+        # Ensure all columns in the final list exist in the dataframe, adding any that are missing
+        for col in final_cols:
+            if col not in report_df.columns:
+                report_df[col] = pd.NA
+
+        # Reorder the DataFrame according to the final column list
+        report_df = report_df.reindex(columns=final_cols)
+
+        with pd.ExcelWriter(report_path, engine='openpyxl') as writer:
+            report_df.to_excel(writer, sheet_name='Reporte_En_Vivo', index=False)
+
+        print(f"Reporte en vivo actualizado en: {report_path}")
+
+    except Exception as e:
+        print(f"No se pudo actualizar el reporte en vivo: {e}")
+
 def print_to_console(message, orig_stdout):
     print(message, file=orig_stdout)
 
@@ -1148,7 +1200,15 @@ def download_pdfs_from_file():
         print(f"Retraso Cambio de Mirror: {user_mirror_switch_delay}s")
         print(f"Mirrors Sci-Hub a utilizar: {', '.join(user_defined_mirrors)}")
         print("-----------------------------------------------------\n")
-        # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
+
+        # Incremental Report: Delete old report file if it exists
+        excel_report_path_to_use = excel_report_path_config
+        if excel_report_path_to_use:
+            try:
+                os.remove(excel_report_path_to_use)
+                print(f"Reporte anterior eliminado: {excel_report_path_to_use}")
+            except FileNotFoundError:
+                pass # It's fine if it doesn't exist
 
         session = requests.Session(); session.headers.update({'User-Agent': STANDARD_USER_AGENT})
         all_articles_log = []; successful_articles_data = []; failed_articles_data = []; original_input_columns = []
@@ -1156,25 +1216,14 @@ def download_pdfs_from_file():
         try: # File reading try block
             file_extension = os.path.splitext(input_file_path)[1].lower()
             if file_extension in ['.xlsx', '.xls']:
-                try:
-                    df = pd.read_excel(input_file_path)
-                except Exception as e:
-                    messagebox.showerror("Error de Excel", f"Error al leer Excel: {e}")
-                    raise # Re-raise to be caught by the outer exception handler for file reading
+                df = pd.read_excel(input_file_path)
             elif file_extension == '.csv': # Explicitly handle CSV
-                try:
-                    df = pd.read_csv(input_file_path)
-                except Exception as e:
-                    messagebox.showerror("Error de CSV", f"Error al leer CSV: {e}")
-                    raise # Re-raise
+                df = pd.read_csv(input_file_path)
             else:
-                messagebox.showerror("Error de Archivo", f"Tipo de archivo no soportado: {file_extension}\nPor favor, use Excel o CSV.")
-                # Set df to None or raise an error to ensure it's handled before use
-                # Raising an error is cleaner to be caught by the existing handler.
                 raise ValueError(f"Tipo de archivo no soportado: {file_extension}")
 
             if df is not None: # Proceed only if df was loaded
-                original_input_columns = [col for col in df.columns if col not in ['DOI', 'Title']]
+                original_input_columns = df.columns.tolist()
             else: # Should not be reached if non-supported file types raise an error
                 raise ValueError("DataFrame no fue cargado correctamente.")
 
@@ -1328,21 +1377,21 @@ def download_pdfs_from_file():
                                 time.sleep(user_mirror_switch_delay)
 
                     # After Sci-Hub loop, if still no pdf_content, try Google Scholar (Selenium method)
-                    if not pdf_content and driver: # Check if driver was initialized
-                        print(f"INFO: DOI {doi} - Attempting Google Scholar (Selenium method)...")
-                        gs_selenium_pdf_content, gs_selenium_status_msg = download_with_selenium_google_scholar(driver, doi, effective_title)
-                        if gs_selenium_pdf_content:
-                            pdf_content = gs_selenium_pdf_content
-                            download_successful_this_doi = True
-                            successful_mirror_for_this_doi = "Google Scholar (Selenium)"
-                            overall_doi_status = gs_selenium_status_msg
-                            mirror_attempts_details_for_doi.append(("Google Scholar (Selenium)", "OBTENIDO", gs_selenium_status_msg))
-                            temp_detailed_status_for_log = f"Success_GoogleScholar_Selenium_{gs_selenium_status_msg}"
-                            temp_failure_reason_for_log = ""
-                        else:
-                            mirror_attempts_details_for_doi.append(("Google Scholar (Selenium)", "FALLO", gs_selenium_status_msg))
-                            temp_failure_reason_for_log = gs_selenium_status_msg
-                            temp_detailed_status_for_log = f"Failure_GoogleScholar_Selenium_{gs_selenium_status_msg}"
+                    # if not pdf_content and driver: # Check if driver was initialized
+                    #     print(f"INFO: DOI {doi} - Attempting Google Scholar (Selenium method)...")
+                    #     gs_selenium_pdf_content, gs_selenium_status_msg = download_with_selenium_google_scholar(driver, doi, effective_title)
+                    #     if gs_selenium_pdf_content:
+                    #         pdf_content = gs_selenium_pdf_content
+                    #         download_successful_this_doi = True
+                    #         successful_mirror_for_this_doi = "Google Scholar (Selenium)"
+                    #         overall_doi_status = gs_selenium_status_msg
+                    #         mirror_attempts_details_for_doi.append(("Google Scholar (Selenium)", "OBTENIDO", gs_selenium_status_msg))
+                    #         temp_detailed_status_for_log = f"Success_GoogleScholar_Selenium_{gs_selenium_status_msg}"
+                    #         temp_failure_reason_for_log = ""
+                    #     else:
+                    #         mirror_attempts_details_for_doi.append(("Google Scholar (Selenium)", "FALLO", gs_selenium_status_msg))
+                    #         temp_failure_reason_for_log = gs_selenium_status_msg
+                    #         temp_detailed_status_for_log = f"Failure_GoogleScholar_Selenium_{gs_selenium_status_msg}"
 
                     # After Google Scholar (Selenium) attempt, if still no pdf_content, try PubMed Central (Selenium method)
                     if not pdf_content and driver: # Check if driver was initialized
@@ -1388,6 +1437,9 @@ def download_pdfs_from_file():
 
                     all_articles_log.append({**original_row_data, 'Start_Time': start_time.strftime("%Y-%m-%d %H:%M:%S"), 'End_Time': end_time.strftime("%Y-%m-%d %H:%M:%S"), 'Duration_Seconds': (end_time - start_time).total_seconds(), 'Detailed_Status': log_entry_detailed_status, 'Failure_Reason': log_entry_failure_reason, 'Successful_Mirror': successful_mirror_for_this_doi })
                     
+                    if excel_report_path_to_use:
+                        write_live_report(excel_report_path_to_use, all_articles_log, original_input_columns)
+
                     # if log_window and log_window.winfo_exists(): log_window.update_idletasks() # GUI logging disabled
                     # Separator after logging for the current article in the main loop
                     print_to_console("===============================================================================================", original_stdout)
@@ -1494,21 +1546,21 @@ def download_pdfs_from_file():
                 else:
                     if mirror_idx_retry < len(mirrors_for_retry) - 1:
                         time.sleep(user_mirror_switch_delay)
-            if not pdf_content_retry and driver:
-                print(f"INFO: DOI {doi_to_retry} [RETRY] - Attempting Google Scholar (Selenium method)...")
-                gs_selenium_pdf_content_retry, gs_selenium_status_msg_retry = download_with_selenium_google_scholar(driver, doi_to_retry, effective_title_for_retry)
-                if gs_selenium_pdf_content_retry:
-                    pdf_content_retry = gs_selenium_pdf_content_retry
-                    retry_successful_this_doi = True
-                    successful_mirror_for_retry = "Google Scholar (Selenium)"
-                    overall_retry_status = gs_selenium_status_msg_retry
-                    mirror_attempts_details_for_retry.append(("Google Scholar (Selenium Retry)", "OBTENIDO", gs_selenium_status_msg_retry))
-                    temp_detailed_status_for_retry_log = f"Success_RETRY_GoogleScholar_Selenium_{gs_selenium_status_msg_retry}"
-                    temp_failure_reason_for_retry_log = ""
-                else:
-                    mirror_attempts_details_for_retry.append(("Google Scholar (Selenium Retry)", "FALLO", gs_selenium_status_msg_retry))
-                    temp_failure_reason_for_retry_log = gs_selenium_status_msg_retry
-                    temp_detailed_status_for_retry_log = f"Failure_RETRY_GoogleScholar_Selenium_{gs_selenium_status_msg_retry}"
+            # if not pdf_content_retry and driver:
+            #     print(f"INFO: DOI {doi_to_retry} [RETRY] - Attempting Google Scholar (Selenium method)...")
+            #     gs_selenium_pdf_content_retry, gs_selenium_status_msg_retry = download_with_selenium_google_scholar(driver, doi_to_retry, effective_title_for_retry)
+            #     if gs_selenium_pdf_content_retry:
+            #         pdf_content_retry = gs_selenium_pdf_content_retry
+            #         retry_successful_this_doi = True
+            #         successful_mirror_for_retry = "Google Scholar (Selenium)"
+            #         overall_retry_status = gs_selenium_status_msg_retry
+            #         mirror_attempts_details_for_retry.append(("Google Scholar (Selenium Retry)", "OBTENIDO", gs_selenium_status_msg_retry))
+            #         temp_detailed_status_for_retry_log = f"Success_RETRY_GoogleScholar_Selenium_{gs_selenium_status_msg_retry}"
+            #         temp_failure_reason_for_retry_log = ""
+            #     else:
+            #         mirror_attempts_details_for_retry.append(("Google Scholar (Selenium Retry)", "FALLO", gs_selenium_status_msg_retry))
+            #         temp_failure_reason_for_retry_log = gs_selenium_status_msg_retry
+            #         temp_detailed_status_for_retry_log = f"Failure_RETRY_GoogleScholar_Selenium_{gs_selenium_status_msg_retry}"
             if not pdf_content_retry and driver:
                 print(f"INFO: DOI {doi_to_retry} [RETRY] - Attempting PubMed Central (Selenium method)...")
                 pmc_selenium_pdf_content_retry, pmc_selenium_status_msg_retry = download_with_selenium_pmc(driver, doi_to_retry, effective_title_for_retry)
@@ -1557,6 +1609,10 @@ def download_pdfs_from_file():
                     original_article_log_entry['Failure_Reason'] = temp_failure_reason_for_retry_log
                 for item in failed_articles_data:
                     if str(item.get('DOI',item.get('doi',''))).strip() == doi_to_retry: item['Failure_Reason'] = temp_failure_reason_for_retry_log; item['Detailed_Status'] = temp_detailed_status_for_retry_log; break
+
+            if excel_report_path_to_use:
+                write_live_report(excel_report_path_to_use, all_articles_log, original_input_columns)
+
             format_and_log_article_status(failed_article_entry, doi_to_retry, effective_title_for_retry, current_article_num_for_log_retry, total_articles, successful_downloads, mirror_attempts_details_for_retry, overall_retry_status, user_inter_doi_delay, is_retry=True)
             print_to_console("===============================================================================================", original_stdout)
             if retry_idx < len(temp_failed_articles_data_for_iteration) - 1: time.sleep(user_inter_doi_delay)
@@ -1575,33 +1631,8 @@ def download_pdfs_from_file():
         print("\n" + "="*50); print(summary_message); print("="*50);
         messagebox.showinfo("Resumen Descarga", summary_message)
 
-        # This is the new logic for Excel report generation
-        excel_report_path_to_use = excel_report_path_config
-        if excel_report_path_to_use:
-            print(f"Generando reporte Excel en: {excel_report_path_to_use}")
-            try:
-                ob_cols = ['DOI','Title','Successful_Mirror'] + [c for c in original_input_columns if c not in ['DOI','Title','Successful_Mirror']] + ['SciHub_Link']
-                fa_cols = ['DOI','Title'] + [c for c in original_input_columns if c not in ['DOI','Title','Failure_Reason','Detailed_Status']] + ['Failure_Reason','Detailed_Status','SciHub_Link']
-                ti_cols = ['DOI','Title'] + [c for c in original_input_columns if c not in ['DOI','Title','Successful_Mirror','Start_Time','End_Time','Duration_Seconds','Detailed_Status','Failure_Reason']] + ['Successful_Mirror','Start_Time','End_Time','Duration_Seconds','Detailed_Status','Failure_Reason','SciHub_Link']
-                def create_ordered_df(data, cols):
-                    df_ = pd.DataFrame(data); df_['SciHub_Link'] = df_.apply(lambda r: f"{sci_hub_base_url_for_report}{r.get('DOI',r.get('doi',''))}" if pd.notna(r.get('DOI',r.get('doi',''))) else '', axis=1)
-                    for c in cols:
-                        if c not in df_.columns: df_[c] = pd.NA
-                    all_data_keys = set()
-                    if data: all_data_keys.update(k for item in data for k in item.keys())
-                    final_cols_ordered = [c for c in cols if c in all_data_keys or c == 'SciHub_Link']
-                    final_cols_ordered.extend([k for k in all_data_keys if k not in final_cols_ordered and k != 'SciHub_Link'])
-                    return df_.reindex(columns=final_cols_ordered)
-
-                df_obtenidos = create_ordered_df(successful_articles_data, ob_cols)
-                df_fallidos = create_ordered_df(failed_articles_data, fa_cols)
-                df_tiempos = create_ordered_df(all_articles_log, ti_cols)
-                with pd.ExcelWriter(excel_report_path_to_use, engine='openpyxl') as writer:
-                    df_obtenidos.to_excel(writer, sheet_name='Obtenidos', index=False); df_fallidos.to_excel(writer, sheet_name='Fallidos', index=False); df_tiempos.to_excel(writer, sheet_name='Tiempos', index=False)
-                messagebox.showinfo("Reporte Excel", f"Reporte Excel guardado: {excel_report_path_to_use}"); print(f"Reporte Excel guardado: {excel_report_path_to_use}")
-            except Exception as e: messagebox.showerror("Error Guardando Excel", f"No se pudo guardar reporte Excel: {e}"); print(f"Error Excel: {e}")
-        else:
-            print("Generación de reporte Excel omitida (ruta no especificada).")
+        # The old final report generation block is now removed.
+        # Live reporting is handled within the loops.
 
         if zip_creation_or_main_loop_error:
             print("Proceso interrumpido por error crítico inicial. No se generará resumen ni Excel.")
